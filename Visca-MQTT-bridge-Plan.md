@@ -51,7 +51,8 @@ Device Hardware
 
 * Connect to MQTT broker (TCP/IP)
 * Subscribe to control topics
-* Publish status, acknowledgements, and controller-originated events
+* Publish status, acknowledgements, controller-originated events, and (optional) **raw evdev** event
+  streams (§3.1.2)
 * Handle reconnection automatically
 
 ### Requirements
@@ -70,8 +71,9 @@ defines:
 * which devices exist (IDs used in `device/<id>/...`)
 * which VISCA model/profile each device uses (ties into the VISCA mapping table)
 * optional per-device scheduler overrides (timing, queue bounds, coalescing rules)
-* optional **libevdev** inputs: which kernel input nodes to open, and **event → VISCA semantic**
-  mappings (see §3.2.2)
+* optional **evdev** inputs: which kernel input nodes to open and which MQTT topic each stream
+  publishes to (see §3.1.2); the bridge emits **raw evdev-style events** only—no translation to
+  VISCA or `device/<id>/...` commands in-process
 
 Example shape (illustrative):
 
@@ -100,50 +102,33 @@ Example shape (illustrative):
       }
     }
   ],
-  "libevdev": {
+  "evdev": {
     "enabled": false,
     "inputs": [
       {
         "id": "usb-keypad-ptz",
         "deviceNode": "/dev/input/event2",
         "grabExclusive": false,
-        "defaultDeviceId": 1,
-        "publishToMqtt": true,
-        "controllerBus": "rs485-1",
-        "maps": [
-          {
-            "match": { "type": "EV_KEY", "code": "KEY_LEFT", "value": 1 },
-            "emit": { "command": "pan", "payload": { "dir": "left", "speed": 10 } }
-          },
-          {
-            "match": { "type": "EV_KEY", "code": "KEY_KP1", "value": 1 },
-            "emit": { "command": "preset/call", "payload": { "value": 1 } }
-          }
-        ]
+        "mqttTopic": "evdev/usb-keypad-ptz/event"
       }
     ]
   }
 }
 ```
 
-`libevdev` block (when `enabled` is true):
+`evdev` block (when `enabled` is true):
 
-* **`inputs`**: list of input sources. Each entry identifies **which device** to listen on and **how
-  to map** kernel events to canonical VISCA-side commands.
+* **`inputs`**: list of sources. Each entry names **which kernel input node** to open and **where**
+  to publish JSON events (see §3.1.2).
 * **`deviceNode`**: path under `/dev/input/` (e.g. `/dev/input/event2`). The implementation may
   optionally support discovery by name or sysfs attributes later; the config must at minimum
   allow explicit node paths for deterministic deployments.
 * **`grabExclusive`**: whether to `EVIOCGRAB` the device so only this process receives events
   (use with care if the same keyboard is shared with the console).
-* **`defaultDeviceId`**: camera `device/<id>/...` used when a mapping does not override `deviceId`.
-* **`publishToMqtt`**: if true, emit **VISCA-formatted semantic JSON** to MQTT (same shape as
-  controller-originated events in §3.1.1); if false, only enqueue for local VISCA execution (still
-  through the command router).
-* **`controllerBus`**: optional label for `controller/<bus>/event` when publishing (aligns with
-  RS-485 bus naming elsewhere in this file).
-* **`maps`**: ordered list of rules; first match wins (or document precedence explicitly in the
-  implementation). Each rule binds an **evdev match** to an **emit** object containing `command`
-  and optional `payload`, and optionally `deviceId` to override the default.
+* **`mqttTopic`**: topic for that input’s event stream. If omitted, a default such as
+  `evdev/<inputId>/event` may be used.
+* **Implementation** may use the **`libevdev`** C library, a thin Pascal binding, or raw
+  `ioctl`/`read` on the event device; that choice does not change the MQTT contract above.
 
 
 ## 3.1.1 VISCA Commands in MQTT
@@ -262,6 +247,58 @@ For example, a controller-derived "pan left" event could be represented as:
 * Topic: `device/1/pan`
 * Payload: `{ "dir": "left", "speed": 10 }`
 
+## 3.1.2 Evdev Events in MQTT
+
+Optional **Linux-only** capability: open configured **`/dev/input/event*`** nodes (via **libevdev**,
+a thin Pascal binding, or raw `ioctl` / `read` on the character device), read kernel **input
+events** (`struct input_event`: `type`, `code`, `value`, time), and **publish each event as JSON
+to MQTT**.
+
+The bridge performs **no** translation from evdev into VISCA packets or into the canonical
+`device/<id>/<command>` control model (§3.1.1). **Node-RED**, rules engines, or other subscribers
+subscribe to the evdev topics, interpret `type` / `code` / `value`, and publish to
+`device/<id>/...` or elsewhere as needed.
+
+### Suggested MQTT topics
+
+Per-input topic (recommended), configured explicitly or defaulted:
+
+```
+evdev/<inputId>/event
+```
+
+### Payload shape
+
+Stable, easy-to-parse JSON mirroring the evdev data. Symbolic names (e.g. `EV_KEY`, `KEY_KP1`) may
+be included when the implementation can resolve them; numeric `type` and `code` should always be
+present for unambiguous handling in Node-RED. Example:
+
+```json
+{
+  "ts": 1713720000123,
+  "inputId": "usb-keypad-ptz",
+  "deviceNode": "/dev/input/event2",
+  "source": "evdev",
+  "type": "EV_KEY",
+  "typeNum": 1,
+  "code": "KEY_KP1",
+  "codeNum": 79,
+  "value": 1
+}
+```
+
+### Relationship to §3.1.1
+
+Evdev streams are **separate** from **VISCA-controller semantic events** on `controller/<bus>/event`.
+The latter remain decoded VISCA → JSON; evdev topics carry **raw input events** only.
+
+### Implementation notes
+
+* Integrate with the process **main poll loop** (non-blocking reads on the evdev fd alongside MQTT
+  and serial).
+* **Hotplug** (device appears/disappears) is optional in v1; minimum viable behavior is a clear
+  log or exit when `deviceNode` is missing at startup.
+
 ---
 
 ## 3.2 Command Router
@@ -270,7 +307,6 @@ For example, a controller-derived "pan left" event could be represented as:
 
 * Parse MQTT payloads (JSON)
 * Convert into internal command objects
-* (Optional) Accept **libevdev**-mapped events as the same internal command objects (see §3.2.2)
 * Dispatch to VISCA encoder
 * Convert decoded VISCA responses/events into internal state updates and MQTT-friendly JSON
 * Publish telemetry/status/events back to MQTT (device state, ACK/error, controller-derived events)
@@ -316,59 +352,6 @@ type
     Value: Integer; // speed, preset index, etc.
   end;
 ```
-
-## 3.2.2 libevdev → VISCA / MQTT
-
-Optional **Linux-only** path: read events from configured **evdev** nodes (via **libevdev** or an
-equivalent thin binding / raw `ioctl` layer), translate them through **`devices.json` mappings**
-into the same **canonical command names and JSON payloads** as MQTT and RS-485-derived controller
-events (§3.1.1), then:
-
-1. **Publish to MQTT** (when enabled for that input): same topic and payload conventions as
-   `controller/<bus>/event`, with `source` set to a fixed string such as `"libevdev"` and
-   `trace` optionally including `{ "inputId": "...", "evdev": { "type": "EV_KEY", "code": 105, "value": 1 } }`
-   for debugging.
-2. **Drive VISCA locally**: enqueue through the **same command router and scheduler** as MQTT
-   messages (per-device serialization, coalescing for `pan` / `tilt` / `zoom`, spacing, ACK
-   discipline) so libevdev cannot bypass backpressure or reordering guarantees.
-
-#### Event matching
-
-Mappings should reference Linux input constants symbolically in config (e.g. `"code": "KEY_LEFT"`)
-with numeric codes accepted as an alternative. For `EV_KEY`, `value` follows the kernel
-convention: `0` release, `1` press, `2` repeat. The implementation should apply **repeat** and
-**release** policies consistently (e.g. map repeat to sustained pan/tilt only where desired, or
-ignore repeat for discrete commands).
-
-#### Output shape (VISCA-formatted events)
-
-Emitted MQTT JSON should be **interchangeable** with controller-originated events so Node-RED and
-other tools can treat hardware panels, MQTT UIs, and local keyboards identically. Example for a
-mapped key press:
-
-```json
-{
-  "ts": 1713720000,
-  "bus": "rs485-1",
-  "source": "libevdev",
-  "inputId": "usb-keypad-ptz",
-  "deviceId": 1,
-  "command": "preset/call",
-  "payload": { "value": 1 },
-  "trace": { "evdev": { "type": "EV_KEY", "code": "KEY_KP1", "value": 1 } }
-}
-```
-
-Downstream forwarding to `device/<id>/<command>` follows the same rules as in §3.1.1.
-
-#### Implementation notes
-
-* Integrate with the process **main poll loop** (non-blocking reads on the evdev fd alongside MQTT
-  and serial).
-* **Hotplug** (device appears/disappears) is optional v1; minimum viable behavior is log-and-retry
-  or exit with a clear error when `deviceNode` is missing at startup.
-* This feature is **orthogonal** to `visca-mapping.json`: mappings here produce **semantic**
-  commands; the VISCA encoder still resolves model-specific bytes from the device profile.
 
 ---
 
@@ -569,8 +552,10 @@ type
 
 ## libevdev (optional, Linux only)
 
-* **`libevdev`** (linked as `-levdev`) when the `libevdev` config block is enabled; otherwise omit
-  the dependency for non-Linux or headless builds without local input.
+* **`libevdev`** (linked as `-levdev`) when the **`evdev`** config block (§3.1.2) is enabled and the
+  implementation chooses that library to read input devices; otherwise omit the dependency for
+  non-Linux builds or builds without evdev publishing. Raw `read`/`ioctl` on `/dev/input/event*`
+  avoids this dependency entirely.
 
 ---
 
