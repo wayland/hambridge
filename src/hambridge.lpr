@@ -1,5 +1,10 @@
 program hambridge;
 
+{
+  HaMBridge v0.1 entry: parse args, load bridge.json + devices.json, wire evdev hub to MQTT
+  publisher, run until SIGINT/SIGTERM.
+}
+
 {$mode ObjFPC}{$H+}
 
 uses
@@ -13,31 +18,36 @@ const
   AppVersion = '0.1.0';
 
 var
-  GStop: Boolean = False;
+  GStop: Boolean = False;  { Set by signal handler; read by RunEvdevMqttLoop }
 
+{ POSIX signal handler: must stay tiny and async-signal-safe; only flips a Boolean. }
 procedure SigHandler(sig: longint); cdecl;
 begin
   GStop := True;
 end;
 
 type
+  { Holds THaMqttPublisher reference so OnEvdev can be a method pointer for the evdev callback. }
   TRun = class
     Mqtt: THaMqttPublisher;
     constructor Create(AM: THaMqttPublisher);
     procedure OnEvdev(Sender: TObject; const Topic, Json: string);
   end;
 
+{ Captures publisher reference for the evdev→MQTT bridge method. }
 constructor TRun.Create(AM: THaMqttPublisher);
 begin
   inherited Create;
   Mqtt := AM;
 end;
 
+{ Bridges evdevreader callback into MQTT publish (single hop so mainloop stays generic). }
 procedure TRun.OnEvdev(Sender: TObject; const Topic, Json: string);
 begin
   Mqtt.PublishJson(Topic, Json);
 end;
 
+{ Writes --help text to stdout (kept tiny so it is safe to call from unknown-arg paths). }
 procedure PrintHelp;
 begin
   WriteLn('HaMBridge (Hardware-MQTT Bridge) ', AppVersion);
@@ -45,6 +55,7 @@ begin
   WriteLn('See README.md and Visca-MQTT-bridge-Plan.md.');
 end;
 
+{ Registers minimal handlers so systemd or a terminal Ctrl+C can stop the main loop cleanly. }
 procedure InstallSignals;
 begin
   FpSignal(SIGTERM, @SigHandler);
@@ -52,6 +63,7 @@ begin
 end;
 
 var
+  { Resolved config paths, CLI accumulators, loaded records, and runtime objects. }
   BridgePath, DevPath: string;
   CliBridge, CliDev: string;
   I: Integer;

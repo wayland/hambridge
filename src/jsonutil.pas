@@ -1,5 +1,10 @@
 unit jsonutil;
 
+{
+  Case-insensitive helpers for TJSONObject: JSON keys from files use camelCase while BRIDGE_*
+  env overrides map to lowercase segments — SameText avoids mismatches.
+}
+
 {$mode ObjFPC}{$H+}
 
 interface
@@ -7,8 +12,11 @@ interface
 uses
   SysUtils, fpjson;
 
+{ Returns the first member whose name matches Key case-insensitively, or nil. }
 function ObjFindCI(Obj: TJSONObject; const Key: string): TJSONData;
+{ Removes every member whose name matches Key case-insensitively (reverse scan so indices stay valid). }
 procedure ObjDeleteCI(Obj: TJSONObject; const Key: string);
+{ Like ObjFindCI but returns child object only if the value is a JSON object. }
 function ObjGetObjectCI(Obj: TJSONObject; const Key: string): TJSONObject;
 
 implementation

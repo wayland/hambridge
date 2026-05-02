@@ -1,5 +1,10 @@
 unit config;
 
+{
+  Loads process-wide settings from bridge.json (plan §3.0): MQTT broker, optional LWT/birth,
+  logging. Applies BRIDGE_* environment overrides before reading values.
+}
+
 {$mode ObjFPC}{$H+}
 
 interface
@@ -8,39 +13,47 @@ uses
   SysUtils, Classes, fpjson, jsonparser, logger;
 
 type
+  { MQTT Last Will and Testament: broker publishes this if the client disconnects uncleanly.
+    Populated from bridge.json "mqtt.lwt" (topic, payload, retain, qos). }
   TBridgeMqttLwt = record
-    Topic: string;
-    Payload: string;
-    Retain: Boolean;
-    Qos: Byte;
+    Topic: string;    { MQTT topic for the LWT message }
+    Payload: string;  { Payload the broker should send on unexpected disconnect }
+    Retain: Boolean;  { Whether the LWT message is retained }
+    Qos: Byte;        { MQTT QoS (0..2) for LWT }
   end;
 
+  { Optional "birth" message published when the client connects successfully.
+    Populated from bridge.json "mqtt.birth". }
   TBridgeMqttBirth = record
-    Topic: string;
-    Payload: string;
+    Topic: string;    { MQTT topic to publish on connect }
+    Payload: string;  { Payload (often "online") }
     Retain: Boolean;
     Qos: Byte;
   end;
 
+  { Broker connection and MQTT session fields from bridge.json "mqtt" object. }
   TBridgeMqtt = record
-    Host: string;
-    Port: Word;
-    Tls: Boolean;
-    Username: string;
-    Password: string;
-    ClientId: string;
-    KeepaliveSec: Word;
-    Lwt: TBridgeMqttLwt;
-    Birth: TBridgeMqttBirth;
+    Host: string;         { Broker hostname or IP (required) }
+    Port: Word;            { Broker TCP port (default 1883) }
+    Tls: Boolean;          { Use TLS when connecting (v0.1: OS default trust) }
+    Username: string;      { MQTT user; empty if anonymous }
+    Password: string;      { MQTT password; empty if none }
+    ClientId: string;      { Unique client id on the broker }
+    KeepaliveSec: Word;    { MQTT keepalive interval in seconds }
+    Lwt: TBridgeMqttLwt;   { Last Will; all-zero/empty if mqtt.lwt omitted }
+    Birth: TBridgeMqttBirth; { Connect announcement; empty if mqtt.birth omitted }
   end;
 
+  { Full bridge.json runtime view after parse + env overrides. }
   TBridgeConfig = record
-    Mqtt: TBridgeMqtt;
-    LogLevel: TLogLevel;
-    LogFormat: string;
+    Mqtt: TBridgeMqtt;      { From "mqtt" }
+    LogLevel: TLogLevel;     { From "log.level" or default info }
+    LogFormat: string;       { From "log.format" (e.g. text); reserved for future json logs }
   end;
 
+{ See implementation: discovery order for bridge.json. }
 function FindBridgeConfigPath(const CliPath: string): string;
+{ Parses file, merges BRIDGE_* env, validates; frees JSON tree before return. }
 function LoadBridgeConfig(const Path: string): TBridgeConfig;
 
 implementation
@@ -48,11 +61,14 @@ implementation
 uses
   StrUtils, jsonutil;
 
+{ True if Path is non-empty and names an existing file (used for config discovery). }
 function FileExistsReadable(const Path: string): Boolean;
 begin
   Result := (Path <> '') and FileExists(Path);
 end;
 
+{ Resolves bridge.json path: CLI wins, then BRIDGE_CONFIG, ./bridge.json, /etc/hambridge/bridge.json.
+  Returns '' if none exist so the caller can print a helpful error. }
 function FindBridgeConfigPath(const CliPath: string): string;
 begin
   if FileExistsReadable(CliPath) then
@@ -66,6 +82,7 @@ begin
   Result := '';
 end;
 
+{ Splits BRIDGE_MQTT_HOST style names on '_' for mapping to dotted JSON paths (mqtt.host). }
 function SplitUnderscore(const S: string): TStringList;
 begin
   Result := TStringList.Create;
@@ -74,6 +91,7 @@ begin
   Result.DelimitedText := S;
 end;
 
+{ Reads a JSON object field by case-insensitive key; coerces numbers/bools to string for flexibility. }
 function JsonGetString(Obj: TJSONObject; const Key: string; const Default: string = ''): string;
 var
   Data: TJSONData;
@@ -92,6 +110,7 @@ begin
   Result := Default;
 end;
 
+{ Reads boolean from JSON (explicit bool, or string true/false, or number nonzero). }
 function JsonGetBool(Obj: TJSONObject; const Key: string; Default: Boolean): Boolean;
 var
   Data: TJSONData;
@@ -110,6 +129,7 @@ begin
   Result := Default;
 end;
 
+{ Reads integer from JSON number or numeric string. }
 function JsonGetInt(Obj: TJSONObject; const Key: string; Default: Integer): Integer;
 var
   Data: TJSONData;
@@ -126,6 +146,7 @@ begin
   Result := Default;
 end;
 
+{ Like JsonGetInt but clamps to Word range (ports, keepalive). }
 function JsonGetWord(Obj: TJSONObject; const Key: string; Default: Word): Word;
 var
   V: Integer;
@@ -138,6 +159,7 @@ begin
   Result := Word(V);
 end;
 
+{ Like JsonGetInt but clamps to 0..255 (MQTT QoS). }
 function JsonGetByte(Obj: TJSONObject; const Key: string; Default: Byte): Byte;
 var
   V: Integer;
@@ -150,6 +172,7 @@ begin
   Result := Byte(V);
 end;
 
+{ Parses BRIDGE_* boolean env values (1/0, true/false, yes/no); Ok=False if string is not a known form. }
 procedure ParseEnvBool(const S: string; out B: Boolean; out Ok: Boolean);
 var
   L: string;
@@ -166,11 +189,14 @@ begin
     Ok := False;
 end;
 
+{ Parses base-10 integer from env string; Ok from TryStrToInt. }
 procedure ParseEnvInt(const S: string; out V: Integer; out Ok: Boolean);
 begin
   Ok := TryStrToInt(Trim(S), V);
 end;
 
+{ Sets or removes a nested key on Root using dotted Path (e.g. mqtt.host). RawValue '' deletes the key;
+  used to merge BRIDGE_* overrides into the parsed JSON before validation. }
 procedure SetJsonPath(Root: TJSONObject; const Path: string; const RawValue: string);
 var
   SL: TStringList;
@@ -242,6 +268,7 @@ begin
   end;
 end;
 
+{ Walks the process environment and applies every BRIDGE_* variable onto Root via SetJsonPath. }
 procedure ApplyBridgeEnvOverrides(Root: TJSONObject);
 var
   I: Integer;
@@ -277,6 +304,7 @@ begin
   end;
 end;
 
+{ Fills TBridgeMqtt from the root object's "mqtt" child; raises if mqtt is missing. }
 function LoadMqttSection(Obj: TJSONObject): TBridgeMqtt;
 var
   M: TJSONObject;
@@ -313,6 +341,8 @@ begin
   end;
 end;
 
+{ Reads bridge.json from disk, applies env overrides, validates required fields, returns TBridgeConfig.
+  Root JSON object is freed before return. }
 function LoadBridgeConfig(const Path: string): TBridgeConfig;
 var
   Parser: TJSONParser;

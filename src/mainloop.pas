@@ -1,5 +1,10 @@
 unit mainloop;
 
+{
+  Single-threaded glue: poll evdev fds, drain ready devices into OnEvdev, tick MQTT reconnect
+  and CheckSynchronize between waits. Exits when WantStop becomes true (signal handler).
+}
+
 {$mode ObjFPC}{$H+}
 
 interface
@@ -16,6 +21,11 @@ implementation
 uses
   Unix;
 
+{
+  Main process loop for v0.1: no secondary threads in our code (MQTT client library may use
+  threads internally — ProcessSynchronize drains their sync queue). 50 ms poll timeout keeps
+  latency bounded while idle.
+}
 procedure RunEvdevMqttLoop(Hub: TEvdevHub; Mqtt: THaMqttPublisher; ASender: TObject;
   OnEvdev: TEvdevPublishEvent; var WantStop: Boolean);
 var
