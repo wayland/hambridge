@@ -1,0 +1,15 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+  configure)
+    if ! getent passwd hambridge >/dev/null 2>&1; then
+      adduser --system --group --no-create-home --home /nonexistent \
+        --shell /usr/sbin/nologin hambridge || true
+    fi
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

@@ -1,0 +1,28 @@
+Source: hambridge
+Section: misc
+Priority: optional
+Rules-Requires-Root: no
+Build-Depends: debhelper-compat (= 13),
+ fakeroot,
+ fpc,
+ libevdev-dev,
+ make,
+ unzip,
+ curl
+Standards-Version: 4.6.2
+Maintainer: HaMBridge Contributors <hambridge@users.invalid>
+# Binary Architecture must match the machine that runs dpkg-buildpackage (arm64 Pi OS 64-bit,
+# armhf Pi OS 32-bit, or amd64 Debian). Edit the next line if yours differs.
+
+Package: hambridge
+Architecture: arm64
+Depends: ${misc:Depends}, ${shlibs:Depends}, adduser
+Suggests: mosquitto
+Description: Hardware-MQTT Bridge (evdev and VISCA over MQTT)
+ HaMBridge (hambridge) is a headless Linux daemon that publishes Linux evdev input
+ events to MQTT and, when configured, subscribes to MQTT device control topics and
+ sends VISCA over serial (RS-232 / RS-485).
+ .
+ Configuration lives in /etc/hambridge/ (bridge.json, devices.json). The shipped
+ systemd unit runs as user "hambridge"; create config and udev rules per the
+ upstream packaging/ documentation.

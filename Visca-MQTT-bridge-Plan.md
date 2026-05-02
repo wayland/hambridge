@@ -773,7 +773,9 @@ used to author code, but project files (`.lpi`, `.lpr`, `.lps`) are **not** comm
 /packaging/systemd/sysusers.d/hambridge.conf
 /packaging/systemd/tmpfiles.d/hambridge.conf
 /packaging/udev/70-hambridge-input.rules
-/packaging/raspbian/README.md   # Raspberry Pi OS / Debian native build notes
+/packaging/raspbian/README.md   # Raspberry Pi OS / Debian native build + .deb notes
+/packaging/debian/             # Debian source package (dpkg-buildpackage → ../hambridge_*.deb)
+/debian                         # symlink → packaging/debian (dpkg-buildpackage expects ./debian)
 /src/
   hambridge.lpr                # program entry point
   config.pas                   # bridge.json loader + env override
@@ -826,6 +828,9 @@ Unit responsibilities for v0.1:
   --devices ./devices.json`.
 * **`make raspbian-help`** — prints install hints for **Raspberry Pi OS / Debian** native builds
   (`fpc`, FCL units, `libevdev-dev`, …). Full notes: **`packaging/raspbian/README.md`**.
+* **`make debian-deb`** — on **Debian / Raspberry Pi OS**, runs **`dpkg-buildpackage`** using
+  **`packaging/debian/`** (exposed as **`./debian`** via symlink); produces **`../hambridge_<ver>_<arch>.deb`**
+  (architecture in **`packaging/debian/control`** must match the build host). See **`packaging/raspbian/README.md`**.
 * **`make install`** *(optional, post-v0.1)* — install binary to `/usr/local/bin` and example
   configs to `/etc/hambridge/`.
 

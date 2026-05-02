@@ -32,7 +32,7 @@ RPM_VER := 0.2.1
 RPM_TOPDIR := $(abspath build/rpmbuild)
 RPM_SPEC := packaging/Redhat/hambridge.spec
 
-.PHONY: all clean run fedora-rpm-sources fedora-rpm fedora-test raspbian-help
+.PHONY: all clean run fedora-rpm-sources fedora-rpm fedora-test raspbian-help debian-deb
 
 all: $(BINARY)
 
@@ -68,6 +68,13 @@ raspbian-help:
 	@echo '  cd /path/to/Visca-MQTT-bridge && make'
 	@echo '  ./build/hambridge --version'
 	@echo 'Runtime: sudo apt-get install -y libevdev2 (or libevdev2 + matching arch multiarch).'
+	@echo 'Debian .deb: sudo apt-get install -y build-essential debhelper fakeroot fpc libevdev-dev make unzip curl'
+	@echo '  then: make debian-deb   (outputs ../hambridge_*_*.deb — see packaging/raspbian/README.md; debian/ → packaging/debian)'
+
+# Debian / Raspberry Pi OS .deb (run on Debian-derived host; dpkg-buildpackage writes to parent dir).
+debian-deb:
+	@command -v dpkg-buildpackage >/dev/null 2>&1 || { echo 'debian-deb: install dpkg-dev debhelper (Debian/Raspberry Pi OS)' >&2; exit 1; }
+	dpkg-buildpackage -us -uc -b -rfakeroot
 
 # --- Fedora RPM (needs: git, rpm-build, fpc, gcc, make, unzip, systemd-rpm-macros) ---
 # Uses a private rpmbuild tree under build/rpmbuild/ (removed by make clean).

@@ -1,6 +1,15 @@
 # Build output (includes downloaded MQTT client under build/deps/)
 /build/
 
+# dpkg-buildpackage / debhelper (artefacts in repo root's parent are not ignored here)
+/packaging/debian/hambridge/
+/packaging/debian/.debhelper/
+/packaging/debian/debhelper-build-stamp
+/packaging/debian/files
+/packaging/debian/substvars
+/packaging/debian/*.substvars
+/packaging/debian/*.debhelper.log
+
 # Optional: ignore a leftover vendored clone from older workflows
 /third_party/fpc-mqtt-client/
 /bin/

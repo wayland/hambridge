@@ -1,0 +1,5 @@
+hambridge (0.2.1-1) unstable; urgency=medium
+
+  * Initial Debian / Raspberry Pi OS packaging (native FPC build).
+
+ -- HaMBridge Contributors <hambridge@users.invalid>  Sat, 02 May 2026 12:00:00 +0000
