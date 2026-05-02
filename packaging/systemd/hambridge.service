@@ -1,0 +1,20 @@
+[Unit]
+Description=HaMBridge: Hardware-MQTT Bridge (evdev to MQTT)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hambridge
+Group=hambridge
+# Config paths — adjust if your distro uses a different layout.
+ExecStart=/usr/local/bin/visca-mqtt-bridge --config /etc/hambridge/bridge.json --devices /etc/hambridge/devices.json
+Restart=on-failure
+RestartSec=5
+
+# Baseline hardening (compatible with reading /etc and publishing MQTT)
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,33 @@
+# HaMBridge (Hardware-MQTT Bridge) — udev rules for /dev/input/event*
+#
+# Goal: grant the dedicated service user "hambridge" read/write on only the event nodes you
+# need, without adding hambridge to the broad "input" group (which exposes all keyboards).
+#
+# Install:
+#   sudo cp 70-hambridge-input.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#
+# Discover attributes for YOUR device (replace eventN):
+#   udevadm info -q path -n /dev/input/eventN
+#   udevadm info -a -p $(udevadm info -q path -n /dev/input/eventN)
+# Look for ATTRS{idVendor}, ATTRS{idProduct}, ATTRS{name}, KERNELS=="input*", etc.
+#
+# Vendor/product must be lower-case hex from lsusb (e.g. 046d:c31c → idVendor 046d, idProduct c31c).
+
+# --- Example A: match by USB vendor + product on the device chain (typical for USB HID) ---
+# Uncomment and replace VENDOR / PRODUCT. Remove the leading # on each line.
+#SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c31c", \
+#  GROUP="hambridge", MODE="0660"
+
+# --- Example B: stable by-id symlink (good when vendor/product is shared by many devices) ---
+# First find the by-id name under /dev/input/by-id/, then match ATTRS{phys} or use a symlink
+# rule; matching by KERNELS + ATTRS{name} is common:
+#SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="Your Exact Name From udevadm*", \
+#  GROUP="hambridge", MODE="0660"
+
+# --- Example C: single-purpose USB keypad by USB bus path (very narrow, good for fixed installs) ---
+#KERNEL=="event*", SUBSYSTEM=="input", KERNELS=="1-1.2", ATTRS{idVendor}=="1234", ATTRS{idProduct}=="5678", \
+#  GROUP="hambridge", MODE="0660"
+
+# If no rule matches, the node stays root:input (0660) and the service user needs another
+# mechanism (e.g. optional "m hambridge input" in sysusers — see ../systemd/sysusers.d/).

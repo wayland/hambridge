@@ -1,0 +1,34 @@
+# Build output
+/build/
+/bin/
+visca-mqtt-bridge
+
+# FPC artefacts
+*.o
+*.ppu
+*.a
+*.or
+*.rsj
+*.compiled
+
+# Lazarus IDE files (headless build is supported; IDE metadata is local-only).
+# Note: .lpr files ARE committed -- they are the Pascal program source.
+*.lpi
+*.lps
+*.lpk
+*.res
+*.ico
+backup/
+lib/
+
+# Local config (commit only the .example variants)
+/bridge.json
+/devices.json
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store

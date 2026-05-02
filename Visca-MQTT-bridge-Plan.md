@@ -1,5 +1,8 @@
 # 📡 MQTT ↔ VISCA Bridge (Object Pascal / Free Pascal)
 
+**Product name:** **HaMBridge** (Hardware-MQTT Bridge) — a headless Linux daemon; this repository
+and plan focus on MQTT, Linux input (evdev), and VISCA/serial as phases land.
+
 ## 1. Purpose
 
 This project implements a **bidirectional bridge between MQTT and Sony VISCA camera control protocol** over serial (RS-232 / RS-485).
@@ -25,6 +28,35 @@ This project implements a **bidirectional bridge between MQTT and Sony VISCA cam
 
 ---
 
+## Roadmap / Phased scope
+
+The bridge is being built in three releases. Each release is a usable end-to-end slice; later
+releases extend the same daemon rather than replacing it.
+
+* **v0.1 — evdev → MQTT** *(current focus)*
+  * Reads kernel input events from configured `/dev/input/event*` nodes via **libevdev**.
+  * Publishes each event as JSON to MQTT (see §3.1.2).
+  * No VISCA, no serial, no `device/<id>/...` control topics, no state cache.
+  * Linux only.
+  * Out-of-process integrations (e.g. Node-RED) are responsible for translating evdev events
+    into VISCA-side actions if any are wanted at this stage.
+
+* **v0.2 — MQTT → VISCA**
+  * Adds the serial layer (§3.4), VISCA encoder (§3.3), and command router (§3.2).
+  * Subscribes to `device/<id>/<command>` and drives a single bus / single device first.
+  * Loads `visca-mapping.json` (§3.3) for per-model topic → byte mappings.
+  * No automatic state polling yet; ACK/error reply topics introduced.
+
+* **v0.3 — VISCA → MQTT**
+  * Adds inbound VISCA decoding (RS-485 sniffing of controllers, device responses).
+  * Publishes `controller/<bus>/event` semantic JSON (§3.1.1).
+  * Adds the State Manager (§3.5) and `device/<id>/status` / `device/<id>/telemetry` topics.
+
+Sections in this document marked **Phase: v0.2** or **Phase: v0.3** describe deferred work and
+are kept here for design continuity; v0.1 implementers can ignore them.
+
+---
+
 # 2. System Architecture
 
 ```
@@ -44,6 +76,88 @@ Device Hardware
 ---
 
 # 3. Components
+
+## 3.0 `bridge.json` (broker + runtime)
+
+The bridge loads a process-wide configuration file separate from `devices.json`. `bridge.json`
+holds **broker connection** and **runtime** settings; `devices.json` holds **what** the bridge
+talks to (buses, devices, evdev inputs).
+
+### Fields
+
+```json
+{
+  "mqtt": {
+    "host": "localhost",
+    "port": 1883,
+    "tls": false,
+    "username": null,
+    "password": null,
+    "clientId": "visca-mqtt-bridge",
+    "keepaliveSec": 30,
+    "lwt": {
+      "topic": "bridge/visca-mqtt-bridge/status",
+      "payload": "offline",
+      "retain": true,
+      "qos": 1
+    },
+    "birth": {
+      "topic": "bridge/visca-mqtt-bridge/status",
+      "payload": "online",
+      "retain": true,
+      "qos": 1
+    }
+  },
+  "log": {
+    "level": "info",
+    "format": "text"
+  }
+}
+```
+
+Notes:
+
+* `tls`: bool for v0.1; full TLS material (CA, cert, key, verifyPeer) is deferred — when `true`
+  in v0.1, default OS trust is used.
+* `clientId`: must be unique per broker; recommend suffixing with hostname or a random tail when
+  running multiple bridges against one broker.
+* `lwt` / `birth`: emit on connect/disconnect so subscribers can detect bridge availability.
+* `log.level`: one of `debug` / `info` / `warn` / `error`.
+* `log.format`: `text` for v0.1; `json` reserved for later.
+
+### Environment-variable overrides
+
+Any field above can be overridden by an environment variable. The mapping is mechanical:
+
+* Prefix `BRIDGE_`, then uppercase the path, joining levels with `_`.
+* Examples:
+  * `BRIDGE_MQTT_HOST` → `mqtt.host`
+  * `BRIDGE_MQTT_PORT` → `mqtt.port`
+  * `BRIDGE_MQTT_USERNAME` → `mqtt.username`
+  * `BRIDGE_MQTT_PASSWORD` → `mqtt.password`
+  * `BRIDGE_MQTT_CLIENTID` → `mqtt.clientId`
+  * `BRIDGE_MQTT_LWT_TOPIC` → `mqtt.lwt.topic`
+  * `BRIDGE_LOG_LEVEL` → `log.level`
+
+Env vars **win** over the file. Booleans accept `true`/`false`/`1`/`0`; integers must parse as
+base-10. Empty string clears the field (treated as unset).
+
+### Config-path discovery order
+
+The bridge resolves `bridge.json` in this order; the first hit wins:
+
+1. `--config <path>` command-line flag
+2. `BRIDGE_CONFIG` environment variable
+3. `./bridge.json` (current working directory)
+4. `/etc/hambridge/bridge.json` (recommended for **HaMBridge** systemd packages; see `packaging/systemd/`)
+
+`devices.json` follows the analogous pattern via `--devices <path>`, `BRIDGE_DEVICES`,
+`./devices.json`, `/etc/hambridge/devices.json`.
+
+If no `bridge.json` (respectively `devices.json`) is found in any of the locations above, the
+bridge logs a clear error and exits non-zero.
+
+---
 
 ## 3.1 MQTT Client Module
 
@@ -125,13 +239,16 @@ Example shape (illustrative):
   allow explicit node paths for deterministic deployments.
 * **`grabExclusive`**: whether to `EVIOCGRAB` the device so only this process receives events
   (use with care if the same keyboard is shared with the console).
-* **`mqttTopic`**: topic for that input’s event stream. If omitted, a default such as
-  `evdev/<inputId>/event` may be used.
-* **Implementation** may use the **`libevdev`** C library, a thin Pascal binding, or raw
-  `ioctl`/`read` on the event device; that choice does not change the MQTT contract above.
+* **`mqttTopic`**: topic for that input's event stream. If omitted, the default is
+  `evdev/<inputId>/event`.
+* **Implementation**: v0.1 uses the **`libevdev`** C library (linked as `-levdev`) via a small
+  Pascal binding unit. Raw `ioctl`/`read` is reserved for a possible later alternative; either
+  way the MQTT contract above does not change.
 
 
 ## 3.1.1 VISCA Commands in MQTT
+
+*Phase: v0.2 (control topics) and v0.3 (semantic controller events).*
 
 Define a canonical set of **VISCA commands** for the MQTT representation. These commands appear
 in two places:
@@ -249,10 +366,14 @@ For example, a controller-derived "pan left" event could be represented as:
 
 ## 3.1.2 Evdev Events in MQTT
 
-Optional **Linux-only** capability: open configured **`/dev/input/event*`** nodes (via **libevdev**,
-a thin Pascal binding, or raw `ioctl` / `read` on the character device), read kernel **input
-events** (`struct input_event`: `type`, `code`, `value`, time), and **publish each event as JSON
-to MQTT**.
+*Phase: v0.1 (this is the entire v0.1 surface besides MQTT and config).*
+
+**Linux-only** capability: open configured **`/dev/input/event*`** nodes via **`libevdev`**
+(linked as `-levdev`, see §6), read kernel **input events** (`struct input_event`: `type`,
+`code`, `value`, time), and **publish each event as JSON to MQTT**.
+
+Raw `read()`/`ioctl()` on the character device is a possible future alternative implementation
+but is **not** an option for v0.1.
 
 The bridge performs **no** translation from evdev into VISCA packets or into the canonical
 `device/<id>/<command>` control model (§3.1.1). **Node-RED**, rules engines, or other subscribers
@@ -269,9 +390,10 @@ evdev/<inputId>/event
 
 ### Payload shape
 
-Stable, easy-to-parse JSON mirroring the evdev data. Symbolic names (e.g. `EV_KEY`, `KEY_KP1`) may
-be included when the implementation can resolve them; numeric `type` and `code` should always be
-present for unambiguous handling in Node-RED. Example:
+Stable, easy-to-parse JSON mirroring the evdev data. Numeric `typeNum` and `codeNum` are
+**always** present so subscribers do not depend on a symbol table. Symbolic `type` and `code`
+strings are populated by `libevdev_event_type_get_name` and `libevdev_event_code_get_name`; if
+libevdev cannot resolve them (rare), those fields are emitted as `null`. Example:
 
 ```json
 {
@@ -287,21 +409,53 @@ present for unambiguous handling in Node-RED. Example:
 }
 ```
 
+* `ts` is milliseconds since Unix epoch from the bridge clock; the kernel `input_event.time` is
+  not surfaced separately in v0.1 (can be added later).
+* `value` follows kernel convention: for `EV_KEY` it is `0` release, `1` press, `2` repeat;
+  for `EV_REL` / `EV_ABS` it is the axis value; for `EV_SYN` it is the sync subtype.
+
+### Filtering policy
+
+v0.1 publishes **every event the kernel delivers**, including:
+
+* `EV_SYN` markers (so subscribers can detect input frames if they care)
+* Auto-repeat key events (`value == 2`)
+* All axis updates from `EV_REL` / `EV_ABS`
+
+Subscribers are responsible for any filtering. Future versions may grow optional per-input filter
+rules; v0.1 keeps the wire format faithful to the kernel.
+
+### MQTT QoS and retain
+
+Evdev publishes use **QoS 0** by default and **`retain = false`** (events are point-in-time;
+retaining them would mislead late subscribers). These defaults are not configurable in v0.1.
+
 ### Relationship to §3.1.1
 
-Evdev streams are **separate** from **VISCA-controller semantic events** on `controller/<bus>/event`.
-The latter remain decoded VISCA → JSON; evdev topics carry **raw input events** only.
+Evdev streams are **separate** from **VISCA-controller semantic events** on
+`controller/<bus>/event`. The latter remain decoded VISCA → JSON; evdev topics carry **raw input
+events** only.
 
 ### Implementation notes
 
-* Integrate with the process **main poll loop** (non-blocking reads on the evdev fd alongside MQTT
-  and serial).
-* **Hotplug** (device appears/disappears) is optional in v1; minimum viable behavior is a clear
-  log or exit when `deviceNode` is missing at startup.
+* Integrate with the process **main poll loop**: a single thread does `poll()` over each input
+  fd plus a periodic MQTT client tick. No per-input thread.
+* **Hotplug** policy:
+  * If `deviceNode` is missing or temporarily unavailable at startup or after disconnect, the
+    bridge logs a warning and **retries with exponential backoff** (e.g. 1 s → 2 s → 4 s,
+    capped at ~30 s).
+  * Read errors that look like a disconnected device (e.g. `ENODEV`) close the fd and re-enter
+    the retry loop.
+  * The bridge **only exits non-zero** on clearly fatal misconfiguration (e.g. malformed
+    `devices.json`), not on an absent input node.
+* When an input is grabbed (`grabExclusive = true`), failure to acquire the grab is logged and
+  the bridge falls back to non-exclusive reading rather than aborting.
 
 ---
 
 ## 3.2 Command Router
+
+*Phase: v0.2 (initial MQTT → VISCA dispatch); extended in v0.3 to publish decoded VISCA events.*
 
 ### Responsibilities
 
@@ -356,6 +510,8 @@ type
 ---
 
 ## 3.3 VISCA Protocol Layer
+
+*Phase: v0.2 (encoder + per-model `visca-mapping.json`); response decode extended in v0.3.*
 
 ### Responsibilities
 
@@ -428,6 +584,8 @@ Example shape (illustrative only):
 
 ## 3.4 Serial Communication Layer (RS-485)
 
+*Phase: v0.2 (TX path); RX/sniff path in v0.3.*
+
 ### Responsibilities
 
 * Open serial port device
@@ -452,6 +610,8 @@ Example shape (illustrative only):
 
 ## 3.5 State Manager
 
+*Phase: v0.3.*
+
 ### Responsibilities
 
 * Maintain device state cache
@@ -474,6 +634,8 @@ Example shape (illustrative only):
 
 ## MQTT → Device
 
+*Phase: v0.2.*
+
 1. MQTT message received
 2. JSON parsed into `TCameraCommand`
 3. Command routed to VISCA layer
@@ -485,10 +647,33 @@ Example shape (illustrative only):
 
 ## Device → MQTT
 
+*Phase: v0.3.*
+
 1. VISCA response received via serial
 2. Parsed into internal state update
 3. Converted to JSON
 4. Published to MQTT status topic
+
+---
+
+## Evdev → MQTT
+
+*Phase: v0.1.*
+
+1. libevdev delivers a `struct input_event` from a configured device node
+2. Reader builds a JSON record (`type`, `typeNum`, `code`, `codeNum`, `value`, `inputId`, `deviceNode`, `ts`)
+3. Publisher emits to `evdev/<inputId>/event` (or configured topic) at QoS 0 (default)
+4. No translation, no acknowledgement, no state retained
+
+```mermaid
+flowchart LR
+    Kernel[Linux input subsystem] --> Evdev["/dev/input/eventX"]
+    Evdev --> Reader["evdevreader (libevdev)"]
+    Reader --> Loop["mainloop: poll() + MQTT tick"]
+    Loop --> Publisher[mqttpublisher]
+    Publisher --> Broker[MQTT broker]
+    Broker --> Subscribers["Node-RED / other subscribers"]
+```
 
 ---
 
@@ -533,34 +718,130 @@ type
   end;
 ```
 
+The class list above describes the **eventual** shape across all phases. v0.1 only needs the
+units listed in §5.1.
+
+---
+
+## 5.1 Build & layout (v0.1)
+
+v0.1 builds with **`fpc` + `make`**; no Lazarus IDE is required. The Lazarus IDE may still be
+used to author code, but project files (`.lpi`, `.lpr`, `.lps`) are **not** committed.
+
+### Repository layout
+
+```
+/Makefile
+/README.md
+/DEVELOPING.md
+/.gitignore
+/LICENSE                       # GPL-3.0-or-later
+/Visca-MQTT-bridge-Plan.md     # this file
+/bridge.json.example
+/devices.json.example
+/packaging/README.md             # systemd, sysusers, tmpfiles, udev templates
+/packaging/systemd/hambridge.service
+/packaging/systemd/sysusers.d/hambridge.conf
+/packaging/systemd/tmpfiles.d/hambridge.conf
+/packaging/udev/70-hambridge-input.rules
+/src/
+  visca-mqtt-bridge.lpr        # program entry point
+  config.pas                   # bridge.json loader + env override
+  devicesconfig.pas            # devices.json loader (evdev block in v0.1)
+  logger.pas                   # stdout text logger (info/warn/error/debug)
+  libevdev_binding.pas         # cdecl externs for libevdev (-levdev)
+  evdevreader.pas              # opens /dev/input/event*, polls, emits records
+  mqttpublisher.pas            # wraps prof7bit/fpc-mqtt-client; LWT + birth
+  mainloop.pas                 # poll() over evdev fds + MQTT client tick
+```
+
+Unit responsibilities for v0.1:
+
+* **`visca-mqtt-bridge.lpr`** — argument parsing (`--config`, `--devices`, `--help`,
+  `--version`), top-level wiring, signal handling (`SIGTERM` graceful shutdown).
+* **`config.pas`** — load `bridge.json`, apply `BRIDGE_*` env overrides, validate. Path
+  discovery as in §3.0.
+* **`devicesconfig.pas`** — load `devices.json`. v0.1 only consumes the `evdev` block; bus and
+  device blocks are parsed but otherwise unused.
+* **`logger.pas`** — global logger, level-filtered, plain text to stdout. No external deps.
+* **`libevdev_binding.pas`** — minimal `cdecl; external 'evdev'` declarations for:
+  `libevdev_new`, `libevdev_free`, `libevdev_set_fd`, `libevdev_grab`,
+  `libevdev_next_event`, `libevdev_event_type_get_name`, `libevdev_event_code_get_name`, plus
+  the `input_event` record. Opaque `Plibevdev` pointer.
+* **`evdevreader.pas`** — owns one `TEvdevInput` per configured input. Opens the device node,
+  initialises libevdev, optionally grabs, exposes the underlying fd for the main loop's
+  `poll()`, and turns each `input_event` into a record/JSON payload.
+* **`mqttpublisher.pas`** — connects to broker, registers LWT and birth, exposes
+  `Publish(topic, payload, qos, retain)`; auto-reconnects with backoff.
+* **`mainloop.pas`** — single-threaded loop: `poll()` on all evdev fds, drain ready inputs,
+  hand each event to the publisher, periodic MQTT keepalive tick. Exit on `SIGTERM`.
+
+### Makefile targets
+
+* **`make`** (default) — builds `visca-mqtt-bridge` into `./build/` using `fpc`, linking
+  `-levdev`. Recommended flags: `-MObjFPC -Scghi -O2 -Xs -gl` (Object Pascal mode, line info
+  for stack traces, optimisation, strip after link).
+* **`make clean`** — removes `./build/` and stray `.o` / `.ppu` files.
+* **`make run`** — convenience target: `./build/visca-mqtt-bridge --config ./bridge.json
+  --devices ./devices.json`.
+* **`make install`** *(optional, post-v0.1)* — install binary to `/usr/local/bin` and example
+  configs to `/etc/hambridge/`.
+
+### Example config files
+
+* **`bridge.json.example`** — annotated copy of the §3.0 example, with `mqtt.host` =
+  `localhost`, no auth, no TLS, `log.level` = `info`.
+* **`devices.json.example`** — minimal config: empty `buses` and `devices` arrays plus an
+  `evdev` block with one disabled-by-default input pointing at `/dev/input/event0` and
+  `mqttTopic` = `evdev/example/event`.
+
+### Runtime prerequisites
+
+* Linux kernel with input subsystem (any modern distro).
+* `libevdev.so` available at runtime (e.g. `libevdev2` on Debian/Ubuntu).
+* The bridge process must have read access to the configured `/dev/input/event*` nodes.
+  **systemd deployments** should use an unprivileged service user (`hambridge`) plus **narrow
+  udev rules** from `packaging/udev/` (preferred over adding that user to the broad `input` group).
+  See [README.md](README.md) and [packaging/README.md](packaging/README.md).
+
 ---
 
 # 6. Dependencies
 
-## MQTT
+Dependencies are listed alongside the phase that introduces them. v0.1 has the smallest set.
 
-* **`prof7bit/fpc-mqtt-client`** (preferred): pure Pascal MQTT client component (MQTT v5)
+## v0.1 (required)
 
-## Serial
+* **MQTT client**: **`prof7bit/fpc-mqtt-client`** (preferred) — pure Pascal MQTT v5 client.
+* **JSON**: `fpjson` + `jsonparser` (FCL, ships with FPC) — used to load `bridge.json` /
+  `devices.json` and to encode evdev event payloads.
+* **libevdev** (Linux only): the C library `libevdev`, linked as `-levdev`. Distro packages:
+  Debian/Ubuntu `libevdev-dev`, Fedora `libevdev-devel`, Arch `libevdev`. v0.1 calls this library
+  via a small in-tree Pascal binding (`src/libevdev_binding.pas`); there is no separate Pascal
+  package dependency.
+* **Free Pascal Compiler**: 3.2.x or newer.
 
-* **Synapse `synaser`** (preferred): pure Pascal serial library (cross-platform) used for RS-485 I/O
+## v0.2 (added)
 
-## JSON
+* **Serial**: **Synapse `synaser`** (preferred) — pure Pascal serial library used for RS-485 I/O.
 
-* `fpjson`
-* `jsonparser`
+## v0.3 (added)
 
-## libevdev (optional, Linux only)
+* No new third-party dependencies expected; reuses Synapse for RS-485 RX and the existing JSON
+  stack for `controller/<bus>/event` and status/telemetry payloads.
 
-* **`libevdev`** (linked as `-levdev`) when the **`evdev`** config block (§3.1.2) is enabled and the
-  implementation chooses that library to read input devices; otherwise omit the dependency for
-  non-Linux builds or builds without evdev publishing. Raw `read`/`ioctl` on `/dev/input/event*`
-  avoids this dependency entirely.
+## Notes
+
+* The bridge is **headless**; LCL / Lazarus runtime components are not required.
+* Building does not require the Lazarus IDE — `fpc` plus a Makefile is the supported flow.
 
 ---
 
 # 7. Runtime Requirements
 
+* **systemd** is the expected deployment: install `packaging/systemd/hambridge.service` (and
+  matching `sysusers.d` / `tmpfiles.d` snippets) so the daemon starts at boot, restarts on
+  failure, and runs as user `hambridge`. See `packaging/README.md`.
 * Long-running daemon/service
 * Automatic MQTT reconnection
 * Serial port recovery on failure
