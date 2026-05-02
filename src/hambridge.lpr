@@ -1,7 +1,8 @@
 program hambridge;
 
 {
-  HaMBridge v0.2 entry: bridge.json + devices.json; optional evdev→MQTT (v0.1) and MQTT device/#→VISCA (v0.2).
+  HaMBridge v0.2.1 entry: bridge.json + devices.json; optional evdev→MQTT (v0.1) and MQTT device/#→VISCA
+  with visca-mapping framed encoding + MQTT JSON (v0.2.1).
 }
 
 {$mode ObjFPC}{$H+}
@@ -15,7 +16,7 @@ uses
   viscamapping, commandrouter;
 
 const
-  AppVersion = '0.2.0';
+  AppVersion = '0.2.1';
 
 var
   GStop: Boolean = False;

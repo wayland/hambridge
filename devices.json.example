@@ -11,7 +11,7 @@
   },
   "devices": [
     {
-      "id": 1,
+      "slug": "camera_stage",
       "model": "marshall-cv344",
       "bus": "rs485-1",
       "viscaAddress": 1,
@@ -25,12 +25,12 @@
     "enabled": true,
     "inputs": [
       {
-        "id": "example",
+        "slug": "example_keypad",
         "deviceNode": "/dev/input/event0",
         "grabExclusive": false,
-        "mqttTopic": "evdev/example/event"
+        "mqttTopic": "evdev/example_keypad/event"
       }
     ]
   },
-  "_note": "Copy to devices.json. For VISCA-only, set evdev.enabled false and inputs []. Set viscaMapping or place visca-mapping.json beside this file. Control topics: device/<id>/<command> (e.g. device/1/preset/call)."
+  "_note": "Copy to devices.json. VISCA control topics: device/<slug>/<command> (e.g. device/camera_stage/preset/call). viscaAddress is VISCA peripheral id 1..7. Evdev default topic: evdev/<slug>/event. JSON field inputSlug in evdev events matches slug."
 }

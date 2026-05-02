@@ -1,7 +1,8 @@
 unit commandrouter;
 
 {
-  v0.2: MQTT device/# → VISCA bytes via visca-mapping.json, per-bus queue and inter-command spacing.
+  MQTT device/# → VISCA bytes via visca-mapping.json, per-bus queue and inter-command spacing.
+  v0.2.1: queued commands carry MQTT JSON for framed template encoding.
 }
 
 {$mode ObjFPC}{$H+}
@@ -13,27 +14,28 @@ uses
   devicesconfig, viscamapping, serialport, logger;
 
 type
-  TQueuedViscaCmd = class
-    DevIdx: Integer;
-    BusIdx: Integer;
-    Topic: string;
-    CommandPath: string;
+  TQueuedViscaCommand = class
+    DeviceConfigIndex: Integer;
+    SerialBusIndex: Integer;
+    MqttTopic: string;
+    ViscaCommandPath: string;
+    MqttPayloadJson: string;
   end;
 
   TCommandRouter = class
   private
-    FDev: TDevicesConfig;
-    FMapping: TViscaMapping;
-    FPorts: array of TSerialPort;
-    FQueues: array of TFPList;
-    FLastSend: array of QWord;
-    FGapMs: array of Cardinal;
-    FMaxDepth: array of Cardinal;
-    function BusIndexById(const BusId: string): Integer;
-    function DeviceIndexById(const IdStr: string): Integer;
-    procedure TrimQueueIfNeeded(BusIdx, DevIdx: Integer; MaxDepth: Cardinal);
+    FDeviceConfiguration: TDevicesConfig;
+    FViscaCommandMapping: TViscaMapping;
+    FSerialPorts: array of TSerialPort;
+    FCommandQueuesPerBus: array of TFPList;
+    FLastTransmitTickPerBus: array of QWord;
+    FInterCommandGapMsPerBus: array of Cardinal;
+    FMaxQueueDepthPerBus: array of Cardinal;
+    function IndexOfSerialBusByConfigId(const BusId: string): Integer;
+    function IndexOfViscaDeviceByTopicSlug(const TopicSlug: string): Integer;
+    procedure TrimOldestCommandsIfQueueExceedsDepth(SerialBusIndex, DeviceConfigIndex: Integer; MaxDepth: Cardinal);
   public
-    constructor Create(const ADev: TDevicesConfig; AMapping: TViscaMapping);
+    constructor Create(const DeviceConfiguration: TDevicesConfig; ViscaCommandMapping: TViscaMapping);
     destructor Destroy; override;
     procedure OnMqttDeviceMessage(Sender: TObject; const Topic, Payload: string);
     procedure Tick;
@@ -44,109 +46,113 @@ implementation
 uses
   Math, StrUtils;
 
-constructor TCommandRouter.Create(const ADev: TDevicesConfig; AMapping: TViscaMapping);
+constructor TCommandRouter.Create(const DeviceConfiguration: TDevicesConfig; ViscaCommandMapping: TViscaMapping);
 var
-  I, J, bi: Integer;
-  gap: Cardinal;
+  BusLoopIndex, DeviceLoopIndex: Integer;
+  SerialBusIndex: Integer;
+  DeviceGapMs: Cardinal;
 begin
   inherited Create;
-  FDev := ADev;
-  FMapping := AMapping;
-  SetLength(FPorts, Length(FDev.Buses));
-  SetLength(FQueues, Length(FDev.Buses));
-  SetLength(FLastSend, Length(FDev.Buses));
-  SetLength(FGapMs, Length(FDev.Buses));
-  SetLength(FMaxDepth, Length(FDev.Buses));
-  for I := 0 to High(FDev.Buses) do
+  FDeviceConfiguration := DeviceConfiguration;
+  FViscaCommandMapping := ViscaCommandMapping;
+  SetLength(FSerialPorts, Length(FDeviceConfiguration.Buses));
+  SetLength(FCommandQueuesPerBus, Length(FDeviceConfiguration.Buses));
+  SetLength(FLastTransmitTickPerBus, Length(FDeviceConfiguration.Buses));
+  SetLength(FInterCommandGapMsPerBus, Length(FDeviceConfiguration.Buses));
+  SetLength(FMaxQueueDepthPerBus, Length(FDeviceConfiguration.Buses));
+  for BusLoopIndex := 0 to High(FDeviceConfiguration.Buses) do
   begin
-    FQueues[I] := TFPList.Create;
-    FLastSend[I] := 0;
-    FGapMs[I] := 40;
-    FMaxDepth[I] := 50;
-    FPorts[I] := TSerialPort.Create;
-    if not FPorts[I].Open(FDev.Buses[I].Port, FDev.Buses[I].Baud, FDev.Buses[I].DataBits,
-      FDev.Buses[I].Parity, FDev.Buses[I].StopBits) then
-      LogFmt(llWarn, 'visca: could not open serial bus "%s" (%s)', [FDev.Buses[I].Id, FDev.Buses[I].Port]);
+    FCommandQueuesPerBus[BusLoopIndex] := TFPList.Create;
+    FLastTransmitTickPerBus[BusLoopIndex] := 0;
+    FInterCommandGapMsPerBus[BusLoopIndex] := 40;
+    FMaxQueueDepthPerBus[BusLoopIndex] := 50;
+    FSerialPorts[BusLoopIndex] := TSerialPort.Create;
+    if not FSerialPorts[BusLoopIndex].Open(FDeviceConfiguration.Buses[BusLoopIndex].Port,
+      FDeviceConfiguration.Buses[BusLoopIndex].Baud, FDeviceConfiguration.Buses[BusLoopIndex].DataBits,
+      FDeviceConfiguration.Buses[BusLoopIndex].Parity, FDeviceConfiguration.Buses[BusLoopIndex].StopBits) then
+      LogFmt(llWarn, 'visca: could not open serial bus "%s" (%s)',
+        [FDeviceConfiguration.Buses[BusLoopIndex].Id, FDeviceConfiguration.Buses[BusLoopIndex].Port]);
   end;
-  for J := 0 to High(FDev.ViscaDevices) do
+  for DeviceLoopIndex := 0 to High(FDeviceConfiguration.ViscaDevices) do
   begin
-    bi := BusIndexById(FDev.ViscaDevices[J].BusId);
-    if bi < 0 then
+    SerialBusIndex := IndexOfSerialBusByConfigId(FDeviceConfiguration.ViscaDevices[DeviceLoopIndex].BusId);
+    if SerialBusIndex < 0 then
       Continue;
-    gap := FDev.ViscaDevices[J].MinInterCommandMs;
-    if gap > FGapMs[bi] then
-      FGapMs[bi] := gap;
-    if FDev.ViscaDevices[J].MaxQueueDepth > FMaxDepth[bi] then
-      FMaxDepth[bi] := FDev.ViscaDevices[J].MaxQueueDepth;
+    DeviceGapMs := FDeviceConfiguration.ViscaDevices[DeviceLoopIndex].MinInterCommandMs;
+    if DeviceGapMs > FInterCommandGapMsPerBus[SerialBusIndex] then
+      FInterCommandGapMsPerBus[SerialBusIndex] := DeviceGapMs;
+    if FDeviceConfiguration.ViscaDevices[DeviceLoopIndex].MaxQueueDepth > FMaxQueueDepthPerBus[SerialBusIndex] then
+      FMaxQueueDepthPerBus[SerialBusIndex] := FDeviceConfiguration.ViscaDevices[DeviceLoopIndex].MaxQueueDepth;
   end;
 end;
 
 destructor TCommandRouter.Destroy;
 var
-  I, K: Integer;
-  Q: TFPList;
-  C: TQueuedViscaCmd;
+  BusLoopIndex, QueueSlotIndex: Integer;
+  QueueList: TFPList;
+  QueuedCommand: TQueuedViscaCommand;
 begin
-  for I := 0 to High(FQueues) do
+  for BusLoopIndex := 0 to High(FCommandQueuesPerBus) do
   begin
-    Q := FQueues[I];
-    if Q <> nil then
+    QueueList := FCommandQueuesPerBus[BusLoopIndex];
+    if QueueList <> nil then
     begin
-      for K := 0 to Q.Count - 1 do
+      for QueueSlotIndex := 0 to QueueList.Count - 1 do
       begin
-        C := TQueuedViscaCmd(Q[K]);
-        C.Free;
+        QueuedCommand := TQueuedViscaCommand(QueueList[QueueSlotIndex]);
+        QueuedCommand.Free;
       end;
-      Q.Free;
+      QueueList.Free;
     end;
-    FPorts[I].Free;
+    FSerialPorts[BusLoopIndex].Free;
   end;
   inherited Destroy;
 end;
 
-function TCommandRouter.BusIndexById(const BusId: string): Integer;
+function TCommandRouter.IndexOfSerialBusByConfigId(const BusId: string): Integer;
 var
-  I: Integer;
+  BusLoopIndex: Integer;
 begin
-  for I := 0 to High(FDev.Buses) do
-    if SameText(FDev.Buses[I].Id, BusId) then
-      Exit(I);
+  for BusLoopIndex := 0 to High(FDeviceConfiguration.Buses) do
+    if SameText(FDeviceConfiguration.Buses[BusLoopIndex].Id, BusId) then
+      Exit(BusLoopIndex);
   Result := -1;
 end;
 
-function TCommandRouter.DeviceIndexById(const IdStr: string): Integer;
+function TCommandRouter.IndexOfViscaDeviceByTopicSlug(const TopicSlug: string): Integer;
 var
-  I: Integer;
+  DeviceLoopIndex: Integer;
 begin
-  for I := 0 to High(FDev.ViscaDevices) do
-    if SameText(FDev.ViscaDevices[I].Id, IdStr) then
-      Exit(I);
+  for DeviceLoopIndex := 0 to High(FDeviceConfiguration.ViscaDevices) do
+    if SameText(FDeviceConfiguration.ViscaDevices[DeviceLoopIndex].Slug, TopicSlug) then
+      Exit(DeviceLoopIndex);
   Result := -1;
 end;
 
-procedure TCommandRouter.TrimQueueIfNeeded(BusIdx, DevIdx: Integer; MaxDepth: Cardinal);
+procedure TCommandRouter.TrimOldestCommandsIfQueueExceedsDepth(SerialBusIndex, DeviceConfigIndex: Integer;
+  MaxDepth: Cardinal);
 var
-  Q: TFPList;
-  K, cnt: Integer;
-  C: TQueuedViscaCmd;
+  QueueList: TFPList;
+  QueueSlotIndex, DeviceCommandCount: Integer;
+  QueuedCommand: TQueuedViscaCommand;
 begin
-  Q := FQueues[BusIdx];
-  cnt := 0;
-  for K := 0 to Q.Count - 1 do
-    if TQueuedViscaCmd(Q[K]).DevIdx = DevIdx then
-      Inc(cnt);
-  while cnt >= Integer(MaxDepth) do
+  QueueList := FCommandQueuesPerBus[SerialBusIndex];
+  DeviceCommandCount := 0;
+  for QueueSlotIndex := 0 to QueueList.Count - 1 do
+    if TQueuedViscaCommand(QueueList[QueueSlotIndex]).DeviceConfigIndex = DeviceConfigIndex then
+      Inc(DeviceCommandCount);
+  while DeviceCommandCount >= Integer(MaxDepth) do
   begin
-    for K := 0 to Q.Count - 1 do
+    for QueueSlotIndex := 0 to QueueList.Count - 1 do
     begin
-      C := TQueuedViscaCmd(Q[K]);
-      if C.DevIdx = DevIdx then
+      QueuedCommand := TQueuedViscaCommand(QueueList[QueueSlotIndex]);
+      if QueuedCommand.DeviceConfigIndex = DeviceConfigIndex then
       begin
         LogFmt(llWarn, 'visca: queue overflow bus %s device %s — dropping oldest',
-          [FDev.Buses[BusIdx].Id, FDev.ViscaDevices[DevIdx].Id]);
-        Q.Delete(K);
-        C.Free;
-        Dec(cnt);
+          [FDeviceConfiguration.Buses[SerialBusIndex].Id, FDeviceConfiguration.ViscaDevices[DeviceConfigIndex].Slug]);
+        QueueList.Delete(QueueSlotIndex);
+        QueuedCommand.Free;
+        Dec(DeviceCommandCount);
         Break;
       end;
     end;
@@ -155,87 +161,89 @@ end;
 
 procedure TCommandRouter.OnMqttDeviceMessage(Sender: TObject; const Topic, Payload: string);
 var
-  pl: string;
-var
-  p: Integer;
-  rest: string;
-  idStr, cmdPath: string;
-  di, bi: Integer;
-  cmd: TQueuedViscaCmd;
+  SlashInRest: Integer;
+  TopicRestAfterDevicePrefix: string;
+  TopicSlug, ViscaCommandPath: string;
+  DeviceConfigIndex, SerialBusIndex: Integer;
+  QueuedCommand: TQueuedViscaCommand;
+  EncodedProbe: TBytes;
+  DeviceRow: TViscaDeviceConfig;
 begin
-  pl := Trim(Payload);
-  if pl <> '' then
-    LogFmt(llDebug, 'visca: mqtt payload ignored in v0.2 (len=%u)', [Length(pl)]);
   if not StartsText('device/', Topic) then
     Exit;
-  rest := Copy(Topic, Length('device/') + 1, MaxInt);
-  p := Pos('/', rest);
-  if p <= 0 then
+  TopicRestAfterDevicePrefix := Copy(Topic, Length('device/') + 1, MaxInt);
+  SlashInRest := Pos('/', TopicRestAfterDevicePrefix);
+  if SlashInRest <= 0 then
     Exit;
-  idStr := Copy(rest, 1, p - 1);
-  cmdPath := Copy(rest, p + 1, MaxInt);
-  if cmdPath = '' then
+  TopicSlug := Copy(TopicRestAfterDevicePrefix, 1, SlashInRest - 1);
+  ViscaCommandPath := Copy(TopicRestAfterDevicePrefix, SlashInRest + 1, MaxInt);
+  if ViscaCommandPath = '' then
     Exit;
-  di := DeviceIndexById(idStr);
-  if di < 0 then
+  DeviceConfigIndex := IndexOfViscaDeviceByTopicSlug(TopicSlug);
+  if DeviceConfigIndex < 0 then
   begin
-    LogFmt(llDebug, 'visca: unknown device id in topic %s', [Topic]);
+    LogFmt(llDebug, 'visca: unknown device slug in topic %s', [Topic]);
     Exit;
   end;
-  bi := BusIndexById(FDev.ViscaDevices[di].BusId);
-  if bi < 0 then
+  SerialBusIndex := IndexOfSerialBusByConfigId(FDeviceConfiguration.ViscaDevices[DeviceConfigIndex].BusId);
+  if SerialBusIndex < 0 then
   begin
-    LogFmt(llWarn, 'visca: device %s references unknown bus', [idStr]);
+    LogFmt(llWarn, 'visca: device slug %s references unknown bus', [TopicSlug]);
     Exit;
   end;
-  if Length(FMapping.EncodeCommand(FDev.ViscaDevices[di].Model, FDev.ViscaDevices[di].ViscaAddress,
-    cmdPath)) = 0 then
+  DeviceRow := FDeviceConfiguration.ViscaDevices[DeviceConfigIndex];
+  EncodedProbe := FViscaCommandMapping.EncodeViscaCommand(DeviceRow.Model, DeviceRow.ViscaAddress, ViscaCommandPath,
+    Payload);
+  if Length(EncodedProbe) = 0 then
   begin
-    LogFmt(llDebug, 'visca: no mapping for topic %s (model %s)', [Topic, FDev.ViscaDevices[di].Model]);
+    LogFmt(llDebug, 'visca: no mapping or missing template values for topic %s (model %s)', [Topic, DeviceRow.Model]);
     Exit;
   end;
-  TrimQueueIfNeeded(bi, di, FDev.ViscaDevices[di].MaxQueueDepth);
-  cmd := TQueuedViscaCmd.Create;
-  cmd.DevIdx := di;
-  cmd.BusIdx := bi;
-  cmd.Topic := Topic;
-  cmd.CommandPath := cmdPath;
-  FQueues[bi].Add(cmd);
+  TrimOldestCommandsIfQueueExceedsDepth(SerialBusIndex, DeviceConfigIndex, DeviceRow.MaxQueueDepth);
+  QueuedCommand := TQueuedViscaCommand.Create;
+  QueuedCommand.DeviceConfigIndex := DeviceConfigIndex;
+  QueuedCommand.SerialBusIndex := SerialBusIndex;
+  QueuedCommand.MqttTopic := Topic;
+  QueuedCommand.ViscaCommandPath := ViscaCommandPath;
+  QueuedCommand.MqttPayloadJson := Payload;
+  FCommandQueuesPerBus[SerialBusIndex].Add(QueuedCommand);
 end;
 
 procedure TCommandRouter.Tick;
 var
-  bi: Integer;
-  nowt: QWord;
-  cmd: TQueuedViscaCmd;
-  pkt: TBytes;
-  dev: TViscaDeviceConfig;
+  SerialBusIndex: Integer;
+  NowTick: QWord;
+  QueuedCommand: TQueuedViscaCommand;
+  ViscaPacket: TBytes;
+  DeviceRow: TViscaDeviceConfig;
 begin
-  nowt := GetTickCount64;
-  for bi := 0 to High(FQueues) do
+  NowTick := GetTickCount64;
+  for SerialBusIndex := 0 to High(FCommandQueuesPerBus) do
   begin
-    if FQueues[bi].Count = 0 then
+    if FCommandQueuesPerBus[SerialBusIndex].Count = 0 then
       Continue;
-    if FPorts[bi].Handle < 0 then
+    if FSerialPorts[SerialBusIndex].SerialFileDescriptor < 0 then
       Continue;
-    if nowt < FLastSend[bi] + FGapMs[bi] then
+    if NowTick < FLastTransmitTickPerBus[SerialBusIndex] + FInterCommandGapMsPerBus[SerialBusIndex] then
       Continue;
-    cmd := TQueuedViscaCmd(FQueues[bi][0]);
-    dev := FDev.ViscaDevices[cmd.DevIdx];
-    pkt := FMapping.EncodeCommand(dev.Model, dev.ViscaAddress, cmd.CommandPath);
-    if Length(pkt) = 0 then
+    QueuedCommand := TQueuedViscaCommand(FCommandQueuesPerBus[SerialBusIndex][0]);
+    DeviceRow := FDeviceConfiguration.ViscaDevices[QueuedCommand.DeviceConfigIndex];
+    ViscaPacket := FViscaCommandMapping.EncodeViscaCommand(DeviceRow.Model, DeviceRow.ViscaAddress,
+      QueuedCommand.ViscaCommandPath, QueuedCommand.MqttPayloadJson);
+    if Length(ViscaPacket) = 0 then
     begin
-      FQueues[bi].Delete(0);
-      cmd.Free;
+      FCommandQueuesPerBus[SerialBusIndex].Delete(0);
+      QueuedCommand.Free;
       Continue;
     end;
-    if not FPorts[bi].WriteBuf(pkt[0], Length(pkt)) then
-      LogFmt(llWarn, 'visca: short write on bus %s', [FDev.Buses[bi].Id])
+    if not FSerialPorts[SerialBusIndex].WriteBuf(ViscaPacket[0], Length(ViscaPacket)) then
+      LogFmt(llWarn, 'visca: short write on bus %s', [FDeviceConfiguration.Buses[SerialBusIndex].Id])
     else
-      LogFmt(llDebug, 'visca: sent %u bytes to %s for %s', [Length(pkt), FDev.Buses[bi].Id, cmd.Topic]);
-    FQueues[bi].Delete(0);
-    cmd.Free;
-    FLastSend[bi] := nowt;
+      LogFmt(llDebug, 'visca: sent %u bytes to %s for %s', [Length(ViscaPacket),
+        FDeviceConfiguration.Buses[SerialBusIndex].Id, QueuedCommand.MqttTopic]);
+    FCommandQueuesPerBus[SerialBusIndex].Delete(0);
+    QueuedCommand.Free;
+    FLastTransmitTickPerBus[SerialBusIndex] := NowTick;
     Exit;
   end;
 end;

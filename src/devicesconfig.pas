@@ -1,7 +1,7 @@
 unit devicesconfig;
 
 {
-  Loads devices.json (plan §3.1): evdev block (v0.1), buses + VISCA devices + viscaMapping (v0.2).
+  Loads devices.json (plan §3.1): evdev inputs use slug; VISCA devices use slug + viscaAddress (1..7).
 }
 
 {$mode ObjFPC}{$H+}
@@ -13,7 +13,7 @@ uses
 
 type
   TEvdevInputConfig = record
-    Id: string;
+    Slug: string;              { MQTT segment and logs, e.g. camera_stage }
     DeviceNode: string;
     GrabExclusive: Boolean;
     MqttTopic: string;
@@ -29,10 +29,10 @@ type
   end;
 
   TViscaDeviceConfig = record
-    Id: string;
+    Slug: string;              { MQTT topic segment: device/<slug>/<command> }
     Model: string;
     BusId: string;
-    ViscaAddress: Byte;
+    ViscaAddress: Byte;        { VISCA peripheral address 1..7 from JSON "viscaAddress" }
     MinInterCommandMs: Cardinal;
     MaxQueueDepth: Cardinal;
   end;
@@ -131,19 +131,22 @@ begin
   Result := Default;
 end;
 
-function JsonGetIdString(Item: TJSONObject): string;
+function JsonGetRequiredSlug(Obj: TJSONObject; const Context: string): string;
 var
-  Data: TJSONData;
+  c: Char;
+  I: Integer;
 begin
-  Data := ObjFindCI(Item, 'id');
-  if Data = nil then
-    raise Exception.Create('devices.json: device entry missing "id"');
-  if Data is TJSONNumber then
-    Exit(IntToStr(TJSONNumber(Data).AsInteger))
-  else if Data is TJSONString then
-    Exit(TJSONString(Data).AsString)
-  else
-    raise Exception.Create('devices.json: device "id" must be string or number');
+  Result := Trim(JsonGetString(Obj, 'slug', ''));
+  if Result = '' then
+    raise Exception.Create('devices.json: ' + Context + ' needs non-empty "slug"');
+  if Pos('/', Result) > 0 then
+    raise Exception.Create('devices.json: ' + Context + ' slug must not contain "/"');
+  for I := 1 to Length(Result) do
+  begin
+    c := Result[I];
+    if not (c in ['a'..'z', 'A'..'Z', '0'..'9', '_', '-']) then
+      raise Exception.Create('devices.json: ' + Context + ' slug may only use letters, digits, underscore, hyphen');
+  end;
 end;
 
 function JsonGetChar(Obj: TJSONObject; const Key: string; Default: Char): Char;
@@ -203,14 +206,12 @@ begin
     if not (Arr.Items[I] is TJSONObject) then
       raise Exception.Create('devices.json: devices[' + IntToStr(I) + '] must be an object');
     Item := TJSONObject(Arr.Items[I]);
-    Devs[I].Id := JsonGetIdString(Item);
+    Devs[I].Slug := JsonGetRequiredSlug(Item, 'VISCA device[' + IntToStr(I) + ']');
     Devs[I].Model := JsonGetString(Item, 'model', '');
     Devs[I].BusId := JsonGetString(Item, 'bus', '');
-    addr := JsonGetInt(Item, 'viscaAddress', 1);
-    if addr < 1 then
-      addr := 1;
-    if addr > 7 then
-      addr := 7;
+    addr := JsonGetInt(Item, 'viscaAddress', -1);
+    if (addr < 1) or (addr > 7) then
+      raise Exception.Create('devices.json: VISCA device slug "' + Devs[I].Slug + '" needs integer viscaAddress in 1..7');
     Devs[I].ViscaAddress := Byte(addr);
     Devs[I].MinInterCommandMs := 40;
     Devs[I].MaxQueueDepth := 50;
@@ -221,9 +222,9 @@ begin
       Devs[I].MaxQueueDepth := Cardinal(Max(1, JsonGetInt(Sch, 'maxQueueDepth', 50)));
     end;
     if Devs[I].Model = '' then
-      raise Exception.Create('devices.json: VISCA device "' + Devs[I].Id + '" needs model');
+      raise Exception.Create('devices.json: VISCA device slug "' + Devs[I].Slug + '" needs model');
     if Devs[I].BusId = '' then
-      raise Exception.Create('devices.json: VISCA device "' + Devs[I].Id + '" needs bus');
+      raise Exception.Create('devices.json: VISCA device slug "' + Devs[I].Slug + '" needs bus');
   end;
 end;
 
@@ -280,16 +281,14 @@ begin
         if not (Arr.Items[I] is TJSONObject) then
           raise Exception.Create('devices.json: evdev.inputs[' + IntToStr(I) + '] must be an object');
         Item := TJSONObject(Arr.Items[I]);
-        Result.EvdevInputs[I].Id := JsonGetString(Item, 'id', '');
+        Result.EvdevInputs[I].Slug := JsonGetRequiredSlug(Item, 'evdev.inputs[' + IntToStr(I) + ']');
         Result.EvdevInputs[I].DeviceNode := JsonGetString(Item, 'deviceNode', '');
         Result.EvdevInputs[I].GrabExclusive := JsonGetBool(Item, 'grabExclusive', False);
         Result.EvdevInputs[I].MqttTopic := JsonGetString(Item, 'mqttTopic', '');
-        if Result.EvdevInputs[I].Id = '' then
-          raise Exception.Create('devices.json: each evdev input needs "id"');
         if Result.EvdevInputs[I].DeviceNode = '' then
-          raise Exception.Create('devices.json: input "' + Result.EvdevInputs[I].Id + '" needs deviceNode');
+          raise Exception.Create('devices.json: evdev input "' + Result.EvdevInputs[I].Slug + '" needs deviceNode');
         if Trim(Result.EvdevInputs[I].MqttTopic) = '' then
-          Result.EvdevInputs[I].MqttTopic := 'evdev/' + Result.EvdevInputs[I].Id + '/event';
+          Result.EvdevInputs[I].MqttTopic := 'evdev/' + Result.EvdevInputs[I].Slug + '/event';
       end;
     end;
   finally
@@ -300,7 +299,7 @@ end;
 procedure ValidateDevicesConfig(const D: TDevicesConfig);
 var
   I, J: Integer;
-  ok: Boolean;
+  BusFound: Boolean;
 begin
   if D.EvdevEnabled and (Length(D.EvdevInputs) = 0) then
     raise Exception.Create('devices.json: evdev.enabled is true but evdev.inputs is empty');
@@ -308,17 +307,25 @@ begin
     raise Exception.Create('devices.json: VISCA devices require at least one bus in "buses"');
   for I := 0 to High(D.ViscaDevices) do
   begin
-    ok := False;
+    BusFound := False;
     for J := 0 to High(D.Buses) do
       if SameText(D.Buses[J].Id, D.ViscaDevices[I].BusId) then
       begin
-        ok := True;
+        BusFound := True;
         Break;
       end;
-    if not ok then
-      raise Exception.Create('devices.json: VISCA device "' + D.ViscaDevices[I].Id +
+    if not BusFound then
+      raise Exception.Create('devices.json: VISCA device slug "' + D.ViscaDevices[I].Slug +
         '" references unknown bus "' + D.ViscaDevices[I].BusId + '"');
   end;
+  for I := 0 to High(D.ViscaDevices) do
+    for J := I + 1 to High(D.ViscaDevices) do
+      if SameText(D.ViscaDevices[I].Slug, D.ViscaDevices[J].Slug) then
+        raise Exception.Create('devices.json: duplicate VISCA device slug "' + D.ViscaDevices[I].Slug + '"');
+  for I := 0 to High(D.EvdevInputs) do
+    for J := I + 1 to High(D.EvdevInputs) do
+      if SameText(D.EvdevInputs[I].Slug, D.EvdevInputs[J].Slug) then
+        raise Exception.Create('devices.json: duplicate evdev input slug "' + D.EvdevInputs[I].Slug + '"');
 end;
 
 function DiscoverViscaMappingPath(const DevicesJsonPath: string; const D: TDevicesConfig): string;

@@ -103,13 +103,13 @@ begin
   FFd := fpOpen(PChar(FCfg.DeviceNode), O_RDONLY or O_NONBLOCK);
   if FFd < 0 then
   begin
-    LogFmt(llWarn, 'evdev: cannot open %s for input %s: %s', [FCfg.DeviceNode, FCfg.Id, SysErrorMessage(fpgeterrno)]);
+    LogFmt(llWarn, 'evdev: cannot open %s for input %s: %s', [FCfg.DeviceNode, FCfg.Slug, SysErrorMessage(fpgeterrno)]);
     Exit;
   end;
   FDev := libevdev_new;
   if FDev = nil then
   begin
-    LogFmt(llError, 'evdev: libevdev_new failed for %s', [FCfg.Id]);
+    LogFmt(llError, 'evdev: libevdev_new failed for %s', [FCfg.Slug]);
     FpClose(FFd);
     FFd := -1;
     Exit;
@@ -117,7 +117,7 @@ begin
   r := libevdev_set_fd(FDev, FFd);
   if r < 0 then
   begin
-    LogFmt(llWarn, 'evdev: libevdev_set_fd failed for %s: errno %d', [FCfg.Id, -Integer(r)]);
+    LogFmt(llWarn, 'evdev: libevdev_set_fd failed for %s: errno %d', [FCfg.Slug, -Integer(r)]);
     libevdev_free(FDev);
     FDev := nil;
     FpClose(FFd);
@@ -128,11 +128,11 @@ begin
   begin
     r := libevdev_grab(FDev, LIBEVDEV_MODE_GRAB);
     if r < 0 then
-      LogFmt(llWarn, 'evdev: grab failed for %s (continuing without grab): errno %d', [FCfg.Id, -Integer(r)])
+      LogFmt(llWarn, 'evdev: grab failed for %s (continuing without grab): errno %d', [FCfg.Slug, -Integer(r)])
     else
-      LogFmt(llInfo, 'evdev: exclusive grab active for %s', [FCfg.Id]);
+      LogFmt(llInfo, 'evdev: exclusive grab active for %s', [FCfg.Slug]);
   end;
-  LogFmt(llInfo, 'evdev: opened %s (%s)', [FCfg.DeviceNode, FCfg.Id]);
+  LogFmt(llInfo, 'evdev: opened %s (%s)', [FCfg.DeviceNode, FCfg.Slug]);
   FBackoffMs := 1000;
   Result := True;
 end;
@@ -173,7 +173,7 @@ begin
   o := TJSONObject.Create;
   try
     o.Add('ts', Int64(DateTimeToUnix(Now, True)) * 1000);
-    o.Add('inputId', FCfg.Id);
+    o.Add('inputSlug', FCfg.Slug);
     o.Add('deviceNode', FCfg.DeviceNode);
     o.Add('source', 'evdev');
     if libevdev_event_type_get_name(typNum) = nil then
@@ -205,12 +205,12 @@ var
       Exit;
     if (-Integer(st)) = ESysENODEV then
     begin
-      LogFmt(llWarn, 'evdev: device removed for %s, reopening', [FCfg.Id]);
+      LogFmt(llWarn, 'evdev: device removed for %s, reopening', [FCfg.Slug]);
       CloseLocked;
       FNextTryTick := GetTickCount64 + 500;
       Exit;
     end;
-    LogFmt(llWarn, 'evdev: libevdev_next_event errno %d on %s', [-Integer(st), FCfg.Id]);
+    LogFmt(llWarn, 'evdev: libevdev_next_event errno %d on %s', [-Integer(st), FCfg.Slug]);
   end;
 
 begin
@@ -234,7 +234,7 @@ begin
         if st < 0 then
         begin
           if (-Integer(st)) <> ESysEAGAIN then
-            LogFmt(llWarn, 'evdev: sync drain errno %d on %s', [-Integer(st), FCfg.Id]);
+            LogFmt(llWarn, 'evdev: sync drain errno %d on %s', [-Integer(st), FCfg.Slug]);
           Break;
         end;
         if st = LIBEVDEV_READ_STATUS_SYNC then

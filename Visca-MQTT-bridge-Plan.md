@@ -36,21 +36,28 @@ releases extend the same daemon rather than replacing it.
 * **v0.1 — evdev → MQTT** *(current focus)*
   * Reads kernel input events from configured `/dev/input/event*` nodes via **libevdev**.
   * Publishes each event as JSON to MQTT (see §3.1.2).
-  * No VISCA, no serial, no `device/<id>/...` control topics, no state cache.
+  * No VISCA, no serial, no `device/<slug>/...` control topics, no state cache.
   * Linux only.
   * Out-of-process integrations (e.g. Node-RED) are responsible for translating evdev events
     into VISCA-side actions if any are wanted at this stage.
 
 * **v0.2 — MQTT → VISCA**
   * Adds the serial layer (§3.4), VISCA encoder (§3.3), and command router (§3.2).
-  * Subscribes to `device/<id>/<command>` and drives a single bus / single device first.
+  * Subscribes to `device/<slug>/<command>` and drives a single bus / single device first.
   * Loads `visca-mapping.json` (§3.3) for per-model topic → byte mappings.
   * No automatic state polling yet; ACK/error reply topics introduced.
+
+* **v0.2.1 — VISCA mapping + MQTT JSON**
+  * **Framed encoding** in `visca-mapping.json`: the bridge emits **`[device]` + `bytes` + template slots + `FF`**, where **`[device]`** is **`0x80 + viscaAddress`** (from each VISCA device’s **`viscaAddress`** in `devices.json`, 1..7) and **`FF`** is the VISCA terminator (not stored per topic).
+  * **`bytes`** holds the fixed middle of the command when present (typically starting with controller **`01`**, then category / command bytes — see §3.3). It may be **omitted or empty** only when a non-empty **`template`** supplies every byte between **`[device]`** and **`FF`**.
+  * **`template`** / **`variables`** may be **omitted** when the command is fully described by **`bytes`** alone (fixed middle between device byte and **`FF`**).
+  * **`template`** is a JSON array of **slot names**; each slot becomes **one byte** on the wire. Values come from the **MQTT JSON payload** (key = slot name, case-insensitive), then fall back to **`variables`** defaults in the mapping.
+  * **Raspberry Pi OS / Debian armhf & aarch64**: the root `Makefile` discovers `libevdev.so.2` under multiarch paths; see **`packaging/raspbian/README.md`** and **`make raspbian-help`**.
 
 * **v0.3 — VISCA → MQTT**
   * Adds inbound VISCA decoding (RS-485 sniffing of controllers, device responses).
   * Publishes `controller/<bus>/event` semantic JSON (§3.1.1).
-  * Adds the State Manager (§3.5) and `device/<id>/status` / `device/<id>/telemetry` topics.
+  * Adds the State Manager (§3.5) and `device/<slug>/status` / `device/<slug>/telemetry` topics.
 
 Sections in this document marked **Phase: v0.2** or **Phase: v0.3** describe deferred work and
 are kept here for design continuity; v0.1 implementers can ignore them.
@@ -182,12 +189,12 @@ The bridge should load a device configuration file (e.g. `devices.json`) at star
 defines:
 
 * which serial buses exist (ports and UART settings)
-* which devices exist (IDs used in `device/<id>/...`)
+* which VISCA devices exist (**`slug`** for `device/<slug>/...`, **`viscaAddress`** 1..7 on the VISCA bus, **`model`**, **`bus`**, optional scheduler)
 * which VISCA model/profile each device uses (ties into the VISCA mapping table)
 * optional per-device scheduler overrides (timing, queue bounds, coalescing rules)
 * optional **evdev** inputs: which kernel input nodes to open and which MQTT topic each stream
   publishes to (see §3.1.2); the bridge emits **raw evdev-style events** only—no translation to
-  VISCA or `device/<id>/...` commands in-process
+  VISCA or `device/<slug>/...` commands in-process
 
 Example shape (illustrative):
 
@@ -204,7 +211,7 @@ Example shape (illustrative):
   },
   "devices": [
     {
-      "id": 1,
+      "slug": "camera_stage",
       "model": "marshall-cv344",
       "bus": "rs485-1",
       "viscaAddress": 1,
@@ -220,7 +227,7 @@ Example shape (illustrative):
     "enabled": false,
     "inputs": [
       {
-        "id": "usb-keypad-ptz",
+        "slug": "usb-keypad-ptz",
         "deviceNode": "/dev/input/event2",
         "grabExclusive": false,
         "mqttTopic": "evdev/usb-keypad-ptz/event"
@@ -239,8 +246,9 @@ Example shape (illustrative):
   allow explicit node paths for deterministic deployments.
 * **`grabExclusive`**: whether to `EVIOCGRAB` the device so only this process receives events
   (use with care if the same keyboard is shared with the console).
+* **`slug`**: stable MQTT segment for this input (letters, digits, `_`, `-`); used in default topics and emitted as **`inputSlug`** in JSON (§3.1.2).
 * **`mqttTopic`**: topic for that input's event stream. If omitted, the default is
-  `evdev/<inputId>/event`.
+  `evdev/<slug>/event`.
 * **Implementation**: v0.1 uses the **`libevdev`** C library (linked as `-l:libevdev.so.2`) via a small
   Pascal binding unit. Raw `ioctl`/`read` is reserved for a possible later alternative; either
   way the MQTT contract above does not change.
@@ -253,13 +261,13 @@ Example shape (illustrative):
 Define a canonical set of **VISCA commands** for the MQTT representation. These commands appear
 in two places:
 
-1. **Device control topics**: `device/<id>/<command>`
+1. **Device control topics**: `device/<slug>/<command>`
 2. **Controller-originated event JSON**: `{"command": "<command>", "payload": {...}}`
 
 The goal is that intermediaries (Node-RED, rules engines, etc.) can transform/reroute JSON and
 either:
 
-* publish directly to `device/<id>/<command>`, or
+* publish directly to `device/<slug>/<command>`, or
 * forward the event form by mapping `command` into a topic path.
 
 ### Canonical command names (topic-path compatible)
@@ -284,14 +292,14 @@ Commands should be slash-separated and safe to embed in MQTT topics. Examples:
 ### Examples
 
 * Device command topic:
-  * Topic: `device/1/preset/set`
+  * Topic: `device/camera_stage/preset/set`
   * Payload: `{ "value": 3 }`
 
 * Controller event JSON (to `controller/rs485-1/event`):
   * ```
   	{
   		"command": "preset/set",
-  		"deviceId": 1,
+  		"deviceSlug": "camera_stage",
   		"payload": { "value": 3 } 
   	}
   	 ```
@@ -301,14 +309,14 @@ Commands should be slash-separated and safe to embed in MQTT topics. Examples:
 #### Control topics
 
 ```
-device/<id>/<command>
+device/<slug>/<command>
 ```
 
 #### Status topics
 
 ```
-device/<id>/status
-device/<id>/telemetry
+device/<slug>/status
+device/<slug>/telemetry
 ```
 
 #### VISCA-controller → MQTT (semantic JSON events)
@@ -350,18 +358,18 @@ Notes:
 
 Forwarding rule (controller event → device control topic):
 
-* If an intermediary knows the destination device ID, it can forward a controller event to:
+* If an intermediary knows the destination device **slug**, it can forward a controller event to:
 
-  * **Canonical path form**: `device/<id>/<command>`
-    - Example: controller event `{ "command": "osd/menu", ... }` → publish to `device/1/osd/menu`
+  * **Canonical path form**: `device/<slug>/<command>`
+    - Example: controller event `{ "command": "osd/menu", ... }` → publish to `device/camera_stage/osd/menu`
 
   * **Alias-to-existing-control-topics form**: map event `command` to the bridge's control topics
-    (recommended where topics already exist, e.g. `device/<id>/pan`, `device/<id>/tilt`,
-    `device/<id>/zoom`), and forward using those topic names.
+    (recommended where topics already exist, e.g. `device/<slug>/pan`, `device/<slug>/tilt`,
+    `device/<slug>/zoom`), and forward using those topic names.
 
 For example, a controller-derived "pan left" event could be represented as:
 
-* Topic: `device/1/pan`
+* Topic: `device/camera_stage/pan`
 * Payload: `{ "dir": "left", "speed": 10 }`
 
 ## 3.1.2 Evdev Events in MQTT
@@ -376,16 +384,16 @@ Raw `read()`/`ioctl()` on the character device is a possible future alternative 
 but is **not** an option for v0.1.
 
 The bridge performs **no** translation from evdev into VISCA packets or into the canonical
-`device/<id>/<command>` control model (§3.1.1). **Node-RED**, rules engines, or other subscribers
+`device/<slug>/<command>` control model (§3.1.1). **Node-RED**, rules engines, or other subscribers
 subscribe to the evdev topics, interpret `type` / `code` / `value`, and publish to
-`device/<id>/...` or elsewhere as needed.
+`device/<slug>/...` or elsewhere as needed.
 
 ### Suggested MQTT topics
 
 Per-input topic (recommended), configured explicitly or defaulted:
 
 ```
-evdev/<inputId>/event
+evdev/<slug>/event
 ```
 
 ### Payload shape
@@ -398,7 +406,7 @@ libevdev cannot resolve them (rare), those fields are emitted as `null`. Example
 ```json
 {
   "ts": 1713720000123,
-  "inputId": "usb-keypad-ptz",
+  "inputSlug": "usb-keypad-ptz",
   "deviceNode": "/dev/input/event2",
   "source": "evdev",
   "type": "EV_KEY",
@@ -536,7 +544,7 @@ Not all cameras implement the same VISCA feature set. Some devices support addit
 (or require different encodings) for functions like on-screen display (OSD) menu control, image
 settings, or extended presets.
 
-Plan for a device capability layer that can be selected per `device/<id>`:
+Plan for a device capability layer that can be selected per `device/<slug>`:
 
 * **Base VISCA profile**: common commands (power, zoom, preset recall/set, etc.)
 * **Device profile**: model-specific support/overrides (e.g., Marshall CV344 OSD menu controls)
@@ -545,7 +553,7 @@ This can be expressed as a mapping table or a per-model encoder class (e.g. `TVi
 `TViscaProfileMarshallCV344`) that the command router uses when converting MQTT messages into
 VISCA packets.
 
-#### JSON mapping table (recommended)
+ u#### JSON mapping table (recommended)
 
 For device-specific commands that can be represented as static VISCA frames, use a JSON mapping
 file (e.g. `visca-mapping.json`) loaded at startup. This allows adding/overriding commands per
@@ -553,32 +561,53 @@ model without recompiling.
 
 The mapping table should support:
 
-* **Per-model selection**: e.g. `"model": "marshall-cv344"` assigned per `device/<id>`
-* **Topic → VISCA frame(s)**: static byte sequences (hex) per topic/action
-* **Optional parameters**: where a command needs a numeric parameter (speed, preset), allow a
-  template/encoding rule rather than raw bytes only
+* **Per-model selection**: e.g. `"model": "marshall-cv344"` assigned per `device/<slug>`
+* **Topic → VISCA frame(s)**: static byte sequences (hex) and/or **framed** rules (fixed middle + template slots)
+* **Optional parameters**: MQTT JSON and `variables` defaults supply **one byte per template slot** (v0.2.1); richer encodings (multi-byte, nibbles) are a later extension.
 
-Example shape (illustrative only):
+#### Wire assembly (v0.2.1)
+
+For topics that define a **non-empty `template`** array:
+
+1. **`[device]`** — single byte **`0x80 + viscaAddress`** (from `devices.json`, clamped to 1..7). Not stored in `bytes`.
+2. **`bytes`** — space-separated hex for the **fixed middle** (normally includes **`01`** controller + category/command bytes).
+3. **Template slots** — each name in `template` appends **one byte**: look up the key in the MQTT payload object, then in **`variables`**, case-insensitive keys. Values may be JSON numbers **0–255** or strings (`"02"`, `"$02"`).
+4. **`FF`** — terminator appended by the bridge.
+
+If **`template`** is absent or empty, **`bytes`** must contain the **full middle** of the command (everything after **`[device]`** and before **`FF`**), as space-separated hex.
+
+Example (framed + inherited model override; illustrative):
 
 ```json
 {
   "models": {
     "base-visca": {
       "topics": {
-        "power/on": { "bytes": "81 01 04 00 02 FF" },
-        "power/off": { "bytes": "81 01 04 00 03 FF" }
+        "power/on": {
+          "bytes": "01 04 00",
+          "template": ["powerArgument"],
+          "variables": { "powerArgument": "02" }
+        },
+        "power/off": {
+          "bytes": "01 04 00 03"
+        }
       }
     },
     "marshall-cv344": {
       "inherits": "base-visca",
       "topics": {
-        "osd/menu": { "bytes": "..." },
-        "osd/up": { "bytes": "..." }
+        "preset/call": {
+          "bytes": "01 04 3F 02",
+          "template": ["presetIndex"],
+          "variables": { "presetIndex": "01" }
+        }
       }
     }
   }
 }
 ```
+
+Publishing MQTT to **`device/camera_stage/preset/call`** with payload **`{"presetIndex": 2}`** overrides the default **`presetIndex`** byte for that command.
 
 ---
 
@@ -661,8 +690,8 @@ Example shape (illustrative only):
 *Phase: v0.1.*
 
 1. libevdev delivers a `struct input_event` from a configured device node
-2. Reader builds a JSON record (`type`, `typeNum`, `code`, `codeNum`, `value`, `inputId`, `deviceNode`, `ts`)
-3. Publisher emits to `evdev/<inputId>/event` (or configured topic) at QoS 0 (default)
+2. Reader builds a JSON record (`type`, `typeNum`, `code`, `codeNum`, `value`, `inputSlug`, `deviceNode`, `ts`)
+3. Publisher emits to `evdev/<slug>/event` (or configured topic) at QoS 0 (default)
 4. No translation, no acknowledgement, no state retained
 
 ```mermaid
@@ -744,6 +773,7 @@ used to author code, but project files (`.lpi`, `.lpr`, `.lps`) are **not** comm
 /packaging/systemd/sysusers.d/hambridge.conf
 /packaging/systemd/tmpfiles.d/hambridge.conf
 /packaging/udev/70-hambridge-input.rules
+/packaging/raspbian/README.md   # Raspberry Pi OS / Debian native build notes
 /src/
   hambridge.lpr                # program entry point
   config.pas                   # bridge.json loader + env override
@@ -751,8 +781,11 @@ used to author code, but project files (`.lpi`, `.lpr`, `.lps`) are **not** comm
   logger.pas                   # stdout text logger (info/warn/error/debug)
   libevdev_binding.pas         # cdecl externs for libevdev (linked via -l:libevdev.so.2)
   evdevreader.pas              # opens /dev/input/event*, polls, emits records
-  mqttpublisher.pas            # wraps prof7bit/fpc-mqtt-client; LWT + birth
-  mainloop.pas                 # poll() over evdev fds + MQTT client tick
+  mqttpublisher.pas            # wraps prof7bit/fpc-mqtt-client; LWT + birth + device/# subscribe
+  mainloop.pas                 # poll() over evdev fds + MQTT tick + VISCA router tick
+  serialport.pas               # Linux serial TX (stty + fpOpen/fpWrite); v0.2+
+  viscamapping.pas             # visca-mapping.json encoder (legacy + framed v0.2.1)
+  commandrouter.pas            # MQTT device/# → queued VISCA TX per bus
 ```
 
 Unit responsibilities for v0.1:
@@ -781,7 +814,8 @@ Unit responsibilities for v0.1:
 
 * **`make`** (default) — builds `hambridge` into `./build/` using `fpc`, linking
   `libevdev.so.2` via `-l:libevdev.so.2` and a discovered `-L` path (Fedora `/usr/lib64`,
-  Debian multiarch `/usr/lib/x86_64-linux-gnu`). Before compiling, downloads the pinned
+  Debian / Raspberry Pi OS multiarch: `/usr/lib/x86_64-linux-gnu`, `/usr/lib/aarch64-linux-gnu`,
+  `/usr/lib/arm-linux-gnueabihf`). Before compiling, downloads the pinned
   **`prof7bit/fpc-mqtt-client`** release zip into `./build/deps/`, verifies **SHA256**, and
   unpacks it (first build needs **network**, **`curl`**, and **`unzip`**). Recommended flags:
   `-MObjFPC -Scghi -O2 -Xs -gl` (Object Pascal mode, line info for stack traces, optimisation,
@@ -790,6 +824,8 @@ Unit responsibilities for v0.1:
   `.ppu` files.
 * **`make run`** — convenience target: `./build/hambridge --config ./bridge.json
   --devices ./devices.json`.
+* **`make raspbian-help`** — prints install hints for **Raspberry Pi OS / Debian** native builds
+  (`fpc`, FCL units, `libevdev-dev`, …). Full notes: **`packaging/raspbian/README.md`**.
 * **`make install`** *(optional, post-v0.1)* — install binary to `/usr/local/bin` and example
   configs to `/etc/hambridge/`.
 
@@ -832,12 +868,14 @@ Dependencies are listed alongside the phase that introduces them. v0.1 has the s
 
 ## v0.2 (added)
 
-* **Serial**: **Synapse `synaser`** (preferred) — pure Pascal serial library used for RS-485 I/O.
+* **Serial**: Linux **`stty`** + **`fpOpen`/`fpWrite`** on a raw TTY (see `src/serialport.pas`).
+  *Note:* the plan previously mentioned Synapse `synaser` as an option; the implemented v0.2
+  path uses POSIX I/O without that dependency.
 
 ## v0.3 (added)
 
-* No new third-party dependencies expected; reuses Synapse for RS-485 RX and the existing JSON
-  stack for `controller/<bus>/event` and status/telemetry payloads.
+* No new third-party dependencies expected; reuses the v0.2 serial layer for RS-485 RX and the
+  existing JSON stack for `controller/<bus>/event` and status/telemetry payloads.
 
 ## Notes
 

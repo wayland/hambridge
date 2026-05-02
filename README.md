@@ -16,7 +16,7 @@ pinned [fpc-mqtt-client](https://github.com/prof7bit/fpc-mqtt-client) release (n
 
 - **v0.1** — evdev → MQTT (current focus). Read configured `/dev/input/event*` devices via
   `libevdev` and publish each kernel input event as JSON to MQTT.
-- **v0.2** — MQTT → VISCA. Subscribe to `device/<id>/<command>` topics and drive a VISCA camera
+- **v0.2** — MQTT → VISCA. Subscribe to `device/<slug>/<command>` topics and drive a VISCA camera
   over RS-485/serial.
 - **v0.3** — VISCA → MQTT. Decode RS-485 controllers and device responses; publish semantic
   events and device telemetry.
@@ -70,7 +70,7 @@ See [DEVELOPING.md](DEVELOPING.md) for build steps and environment overrides. Af
 ./build/hambridge --config ./bridge.json --devices ./devices.json
 ```
 
-Each kernel event is published as JSON to `evdev/<inputId>/event` (or the configured topic) at
+Each kernel event is published as JSON to `evdev/<slug>/event` (or the configured topic) at
 QoS 0, no retain. Subscribers (e.g. Node-RED) translate events into VISCA-side actions until
 v0.2 lands.
 

@@ -16,6 +16,7 @@ Contents:
 | [systemd/sysusers.d/hambridge.conf](systemd/sysusers.d/hambridge.conf) | Declares unprivileged `hambridge` user and group |
 | [systemd/tmpfiles.d/hambridge.conf](systemd/tmpfiles.d/hambridge.conf) | State directory `/var/lib/hambridge` |
 | [udev/70-hambridge-input.rules](udev/70-hambridge-input.rules) | **Template** udev rules so `hambridge` can open specific `/dev/input/event*` nodes |
+| [raspbian/README.md](raspbian/README.md) | **Raspberry Pi OS / Debian**: native `fpc` + `make` build, `apt` packages |
 
 Install order (summary):
 

@@ -1,8 +1,9 @@
 unit viscamapping;
 
 {
-  Loads visca-mapping.json (plan §3.3): per-model topic paths → static VISCA hex frames,
-  with optional single-level "inherits" merge for topic lookup.
+  Loads visca-mapping.json (plan §3.3): per-model topic → VISCA packets.
+  v0.2.1: framed encoding (device byte + optional fixed middle hex + template slots + FF) with MQTT JSON
+  and "variables" defaults; if template is absent/empty, bytes alone is the full middle (after device byte, before FF).
 }
 
 {$mode ObjFPC}{$H+}
@@ -13,24 +14,31 @@ uses
   SysUtils, Classes, fpjson, jsonparser;
 
 type
-  TViscaMapping = class
+  TViscaCommandMapping = class
   private
-    FModels: TJSONObject;
-    function ModelByName(const ModelName: string): TJSONObject;
-    function TopicBytesFromModel(M: TJSONObject; const TopicPath: string): string;
+    FModelDefinitionsRoot: TJSONObject;
+    function FindModelObjectByName(const ModelName: string): TJSONObject;
+    function FindTopicDefinition(M: TJSONObject; const TopicPath: string): TJSONObject;
+    function ParseHexSpaceSeparated(const Hex: string): TBytes;
+    function EncodeFixedMiddleOnlyPacket(TopicDef: TJSONObject; ViscaAddress: Byte): TBytes;
+    function EncodeFramedPacket(TopicDef: TJSONObject; ViscaAddress: Byte; const MqttPayloadJson: string): TBytes;
+    function ResolveTemplateSlotByte(const SlotName: string; SlotDefaults, MqttPayload: TJSONObject): Integer;
+    function JsonValueToByte(Data: TJSONData): Integer;
   public
-    constructor Create(const Path: string);
+    constructor Create(const MappingFilePath: string);
     destructor Destroy; override;
-    { Returns VISCA packet bytes; empty if unknown model/topic. Applies address to first $81..$87. }
-    function EncodeCommand(const ModelName: string; ViscaAddress: Byte; const TopicPath: string): TBytes;
+    function EncodeViscaCommand(const ModelName: string; ViscaAddress: Byte; const TopicPath: string;
+      const MqttPayloadJson: string): TBytes;
   end;
+
+  TViscaMapping = TViscaCommandMapping;
 
 implementation
 
 uses
   jsonutil, Math;
 
-function JsonGetStringObj(Obj: TJSONObject; const Key: string; const Default: string = ''): string;
+function JsonGetStringFromObject(Obj: TJSONObject; const Key: string; const Default: string = ''): string;
 var
   Data: TJSONData;
 begin
@@ -44,13 +52,13 @@ begin
   Result := Default;
 end;
 
-function HexStringToBytes(const Hex: string; ViscaAddress: Byte): TBytes;
+function TViscaCommandMapping.ParseHexSpaceSeparated(const Hex: string): TBytes;
 var
   S: string;
   tok: string;
-  v: Integer;
   c: Char;
   code: Integer;
+  nextLen: Integer;
 begin
   SetLength(Result, 0);
   S := Trim(Hex);
@@ -72,38 +80,191 @@ begin
           SetLength(Result, 0);
           Exit;
         end;
-        v := Length(Result);
-        SetLength(Result, v + 1);
-        Result[v] := Byte(code);
+        nextLen := Length(Result) + 1;
+        SetLength(Result, nextLen);
+        Result[nextLen - 1] := Byte(code);
         tok := '';
       end;
     end
     else
       tok := tok + c;
   end;
-  if (Length(Result) > 0) and (Result[0] >= $81) and (Result[0] <= $87) then
-    Result[0] := Byte($80 + Min(Max(ViscaAddress, 1), 7));
 end;
 
-constructor TViscaMapping.Create(const Path: string);
+function TViscaCommandMapping.JsonValueToByte(Data: TJSONData): Integer;
+var
+  S: string;
+  v: Int64;
+begin
+  Result := -1;
+  if Data = nil then
+    Exit;
+  if Data is TJSONNumber then
+  begin
+    v := TJSONNumber(Data).AsInt64;
+    if (v < 0) or (v > 255) then
+      Exit(-1);
+    Exit(Integer(v));
+  end;
+  if Data is TJSONString then
+  begin
+    S := Trim(TJSONString(Data).AsString);
+    if S = '' then
+      Exit(-1);
+    if S[1] = '$' then
+      Result := StrToIntDef(S, -1)
+    else
+      Result := StrToIntDef('$' + S, -1);
+    if (Result < 0) or (Result > 255) then
+      Result := -1;
+  end;
+end;
+
+function TViscaCommandMapping.ResolveTemplateSlotByte(const SlotName: string; SlotDefaults,
+  MqttPayload: TJSONObject): Integer;
+var
+  Data: TJSONData;
+begin
+  Result := -1;
+  if MqttPayload <> nil then
+  begin
+    Data := ObjFindCI(MqttPayload, SlotName);
+    Result := JsonValueToByte(Data);
+    if Result >= 0 then
+      Exit;
+  end;
+  if SlotDefaults <> nil then
+  begin
+    Data := ObjFindCI(SlotDefaults, SlotName);
+    Result := JsonValueToByte(Data);
+  end;
+end;
+
+function TViscaCommandMapping.EncodeFramedPacket(TopicDef: TJSONObject; ViscaAddress: Byte;
+  const MqttPayloadJson: string): TBytes;
+var
+  FixedMiddle: TBytes;
+  TemplateArray: TJSONArray;
+  SlotDefaults: TJSONObject;
+  MqttPayload: TJSONObject;
+  Parser: TJSONParser;
+  PayloadData: TJSONData;
+  I: Integer;
+  SlotName: string;
+  ByteVal: Integer;
+  DeviceByte: Byte;
+  Stream: TStringStream;
+begin
+  SetLength(Result, 0);
+  MqttPayload := nil;
+  PayloadData := nil;
+  FixedMiddle := ParseHexSpaceSeparated(JsonGetStringFromObject(TopicDef, 'bytes', ''));
+  TemplateArray := nil;
+  if ObjFindCI(TopicDef, 'template') is TJSONArray then
+    TemplateArray := TJSONArray(ObjFindCI(TopicDef, 'template'));
+  if (TemplateArray = nil) or (TemplateArray.Count = 0) then
+    Exit;
+  SlotDefaults := ObjGetObjectCI(TopicDef, 'variables');
+  if Trim(MqttPayloadJson) <> '' then
+  begin
+    Stream := TStringStream.Create(MqttPayloadJson);
+    try
+      Parser := TJSONParser.Create(Stream);
+      try
+        try
+          PayloadData := Parser.Parse;
+        except
+          PayloadData := nil;
+        end;
+      finally
+        Parser.Free;
+      end;
+    finally
+      Stream.Free;
+    end;
+    if PayloadData is TJSONObject then
+      MqttPayload := TJSONObject(PayloadData)
+    else if PayloadData <> nil then
+    begin
+      PayloadData.Free;
+      PayloadData := nil;
+    end;
+  end;
+  try
+    DeviceByte := Byte($80 + Min(Max(ViscaAddress, 1), 7));
+    SetLength(Result, 1 + Length(FixedMiddle) + TemplateArray.Count + 1);
+    Result[0] := DeviceByte;
+    for I := 0 to High(FixedMiddle) do
+      Result[1 + I] := FixedMiddle[I];
+    for I := 0 to TemplateArray.Count - 1 do
+    begin
+      if not (TemplateArray.Items[I] is TJSONString) then
+      begin
+        SetLength(Result, 0);
+        Exit;
+      end;
+      SlotName := Trim(TJSONString(TemplateArray.Items[I]).AsString);
+      if SlotName = '' then
+      begin
+        SetLength(Result, 0);
+        Exit;
+      end;
+      ByteVal := ResolveTemplateSlotByte(SlotName, SlotDefaults, MqttPayload);
+      if ByteVal < 0 then
+      begin
+        SetLength(Result, 0);
+        Exit;
+      end;
+      Result[1 + Length(FixedMiddle) + I] := Byte(ByteVal);
+    end;
+    Result[High(Result)] := $FF;
+  finally
+    if MqttPayload <> nil then
+      MqttPayload.Free
+    else if PayloadData <> nil then
+      PayloadData.Free;
+  end;
+end;
+
+function TViscaCommandMapping.EncodeFixedMiddleOnlyPacket(TopicDef: TJSONObject; ViscaAddress: Byte): TBytes;
+var
+  Middle: TBytes;
+  DeviceByte: Byte;
+  MiddleLen, OutIdx: Integer;
+begin
+  SetLength(Result, 0);
+  Middle := ParseHexSpaceSeparated(JsonGetStringFromObject(TopicDef, 'bytes', ''));
+  MiddleLen := Length(Middle);
+  if MiddleLen = 0 then
+    Exit;
+  DeviceByte := Byte($80 + Min(Max(ViscaAddress, 1), 7));
+  SetLength(Result, 1 + MiddleLen + 1);
+  Result[0] := DeviceByte;
+  for OutIdx := 0 to MiddleLen - 1 do
+    Result[1 + OutIdx] := Middle[OutIdx];
+  Result[High(Result)] := $FF;
+end;
+
+constructor TViscaCommandMapping.Create(const MappingFilePath: string);
 var
   Parser: TJSONParser;
-  Stream: TFileStream;
+  FileStream: TFileStream;
   Data: TJSONData;
   Root: TJSONObject;
+  ModelsObj: TJSONObject;
 begin
   inherited Create;
-  FModels := nil;
-  Stream := TFileStream.Create(Path, fmOpenRead or fmShareDenyWrite);
+  FModelDefinitionsRoot := nil;
+  FileStream := TFileStream.Create(MappingFilePath, fmOpenRead or fmShareDenyWrite);
   try
-    Parser := TJSONParser.Create(Stream);
+    Parser := TJSONParser.Create(FileStream);
     try
       Data := Parser.Parse;
     finally
       Parser.Free;
     end;
   finally
-    Stream.Free;
+    FileStream.Free;
   end;
   if not (Data is TJSONObject) then
   begin
@@ -111,76 +272,87 @@ begin
     raise Exception.Create('visca-mapping.json: root must be an object');
   end;
   Root := TJSONObject(Data);
-  if ObjGetObjectCI(Root, 'models') = nil then
+  ModelsObj := ObjGetObjectCI(Root, 'models');
+  if ModelsObj = nil then
   begin
     Root.Free;
     raise Exception.Create('visca-mapping.json: missing "models" object');
   end;
-  FModels := TJSONObject(ObjGetObjectCI(Root, 'models').Clone);
+  FModelDefinitionsRoot := TJSONObject(ModelsObj.Clone);
   Root.Free;
 end;
 
-destructor TViscaMapping.Destroy;
+destructor TViscaCommandMapping.Destroy;
 begin
-  FModels.Free;
+  FModelDefinitionsRoot.Free;
   inherited Destroy;
 end;
 
-function TViscaMapping.ModelByName(const ModelName: string): TJSONObject;
+function TViscaCommandMapping.FindModelObjectByName(const ModelName: string): TJSONObject;
 begin
-  Result := ObjGetObjectCI(FModels, ModelName);
+  Result := ObjGetObjectCI(FModelDefinitionsRoot, ModelName);
 end;
 
-function TopicKeyMatch(const AName, TopicPath: string): Boolean;
+function TopicKeyMatches(const JsonMemberName, TopicPath: string): Boolean;
 begin
-  Result := SameText(AName, TopicPath);
+  Result := SameText(JsonMemberName, TopicPath);
 end;
 
-function TViscaMapping.TopicBytesFromModel(M: TJSONObject; const TopicPath: string): string;
+function TViscaCommandMapping.FindTopicDefinition(M: TJSONObject; const TopicPath: string): TJSONObject;
 var
-  Topics: TJSONObject;
-  I: Integer;
-  Child: TJSONObject;
-  Hex: string;
-  inh: string;
-  Base: TJSONObject;
+  TopicsObject: TJSONObject;
+  MemberIndex: Integer;
+  ParentModelName: string;
+  BaseModel: TJSONObject;
 begin
-  Result := '';
+  Result := nil;
   if M = nil then
     Exit;
-  Topics := ObjGetObjectCI(M, 'topics');
-  if Topics <> nil then
+  TopicsObject := ObjGetObjectCI(M, 'topics');
+  if TopicsObject <> nil then
   begin
-    for I := 0 to Topics.Count - 1 do
+    for MemberIndex := 0 to TopicsObject.Count - 1 do
     begin
-      if not (Topics.Items[I] is TJSONObject) then
+      if not (TopicsObject.Items[MemberIndex] is TJSONObject) then
         Continue;
-      if not TopicKeyMatch(Topics.Names[I], TopicPath) then
+      if not TopicKeyMatches(TopicsObject.Names[MemberIndex], TopicPath) then
         Continue;
-      Child := TJSONObject(Topics.Items[I]);
-      Hex := JsonGetStringObj(Child, 'bytes', '');
-      if Hex <> '' then
-        Exit(Hex);
+      Exit(TJSONObject(TopicsObject.Items[MemberIndex]));
     end;
   end;
-  inh := JsonGetStringObj(M, 'inherits', '');
-  if inh = '' then
+  ParentModelName := JsonGetStringFromObject(M, 'inherits', '');
+  if ParentModelName = '' then
     Exit;
-  Base := ModelByName(inh);
-  Result := TopicBytesFromModel(Base, TopicPath);
+  BaseModel := FindModelObjectByName(ParentModelName);
+  Result := FindTopicDefinition(BaseModel, TopicPath);
 end;
 
-function TViscaMapping.EncodeCommand(const ModelName: string; ViscaAddress: Byte; const TopicPath: string): TBytes;
+function TopicUsesNonEmptyTemplateArray(TopicDef: TJSONObject): Boolean;
 var
-  M: TJSONObject;
-  Hex: string;
+  Arr: TJSONArray;
+begin
+  Result := False;
+  if not (ObjFindCI(TopicDef, 'template') is TJSONArray) then
+    Exit;
+  Arr := TJSONArray(ObjFindCI(TopicDef, 'template'));
+  Result := Arr.Count > 0;
+end;
+
+function TViscaCommandMapping.EncodeViscaCommand(const ModelName: string; ViscaAddress: Byte; const TopicPath: string;
+  const MqttPayloadJson: string): TBytes;
+var
+  ModelObject: TJSONObject;
+  TopicDefinition: TJSONObject;
 begin
   SetLength(Result, 0);
-  M := ModelByName(ModelName);
-  Hex := TopicBytesFromModel(M, TopicPath);
-  if Hex = '' then
+  ModelObject := FindModelObjectByName(ModelName);
+  TopicDefinition := FindTopicDefinition(ModelObject, TopicPath);
+  if TopicDefinition = nil then
     Exit;
-  Result := HexStringToBytes(Hex, ViscaAddress);
+  if TopicUsesNonEmptyTemplateArray(TopicDefinition) then
+    Result := EncodeFramedPacket(TopicDefinition, ViscaAddress, MqttPayloadJson)
+  else
+    Result := EncodeFixedMiddleOnlyPacket(TopicDefinition, ViscaAddress);
 end;
 
 end.

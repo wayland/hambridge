@@ -1,4 +1,4 @@
-# HaMBridge v0.1 — Free Pascal build
+# HaMBridge — Free Pascal build (native: Fedora x86_64, Debian/Raspberry Pi OS armhf & aarch64, …)
 FPC ?= fpc
 SRCDIR := src
 OUTDIR := build
@@ -16,20 +16,23 @@ MQTTDIR := $(MQTT_EXTRACT)/mqtt
 FPCFLAGS := -MObjFPC -Scghi -O2 -gl -Xs
 FPCFLAGS += -Fu$(SRCDIR) -Fu$(MQTTDIR) -FU$(OUTDIR)
 # Link against versioned libevdev.so.2 (runtime package); no unversioned libevdev.so symlink required.
-EVDEV_SO := $(firstword $(wildcard /usr/lib64/libevdev.so.2) $(wildcard /usr/lib/x86_64-linux-gnu/libevdev.so.2))
+EVDEV_SO := $(firstword $(wildcard /usr/lib64/libevdev.so.2) \
+  $(wildcard /usr/lib/x86_64-linux-gnu/libevdev.so.2) \
+  $(wildcard /usr/lib/aarch64-linux-gnu/libevdev.so.2) \
+  $(wildcard /usr/lib/arm-linux-gnueabihf/libevdev.so.2))
 ifeq ($(EVDEV_SO),)
-$(error libevdev.so.2 not found under /usr/lib64 or /usr/lib/x86_64-linux-gnu — install the libevdev runtime package (e.g. libevdev2 on Debian, libevdev on Fedora))
+$(error libevdev.so.2 not found — install libevdev (e.g. Debian libevdev2 / Raspberry Pi OS: same; Fedora: libevdev). See packaging/raspbian/README.md)
 endif
 EVDEV_LDIR := $(dir $(EVDEV_SO))
 FPCFLAGS += -k-L$(EVDEV_LDIR) -k-l:libevdev.so.2
-FPCFLAGS += -Fl/usr/lib64 -Fl/usr/lib/x86_64-linux-gnu
+FPCFLAGS += -Fl/usr/lib64 -Fl/usr/lib/x86_64-linux-gnu -Fl/usr/lib/aarch64-linux-gnu -Fl/usr/lib/arm-linux-gnueabihf
 
 # Keep in sync with src/hambridge.lpr AppVersion and packaging/Redhat/hambridge.spec Version.
-RPM_VER := 0.2.0
+RPM_VER := 0.2.1
 RPM_TOPDIR := $(abspath build/rpmbuild)
 RPM_SPEC := packaging/Redhat/hambridge.spec
 
-.PHONY: all clean run fedora-rpm-sources fedora-rpm fedora-test
+.PHONY: all clean run fedora-rpm-sources fedora-rpm fedora-test raspbian-help
 
 all: $(BINARY)
 
@@ -57,6 +60,14 @@ clean:
 
 run: $(BINARY)
 	$(BINARY) --config ./bridge.json --devices ./devices.json
+
+# Native build on Raspberry Pi OS / Debian: install deps then `make` (see packaging/raspbian/README.md).
+raspbian-help:
+	@echo 'Raspberry Pi OS / Debian (on the Pi):'
+	@echo '  sudo apt-get update && sudo apt-get install -y fpc fp-units-fcl fp-units-rtl libevdev-dev make unzip curl'
+	@echo '  cd /path/to/Visca-MQTT-bridge && make'
+	@echo '  ./build/hambridge --version'
+	@echo 'Runtime: sudo apt-get install -y libevdev2 (or libevdev2 + matching arch multiarch).'
 
 # --- Fedora RPM (needs: git, rpm-build, fpc, gcc, make, unzip, systemd-rpm-macros) ---
 # Uses a private rpmbuild tree under build/rpmbuild/ (removed by make clean).
