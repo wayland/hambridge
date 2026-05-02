@@ -128,7 +128,9 @@ begin
   begin
     r := libevdev_grab(FDev, LIBEVDEV_MODE_GRAB);
     if r < 0 then
-      LogFmt(llWarn, 'evdev: grab failed for %s (continuing without grab): errno %d', [FCfg.Id, -Integer(r)]);
+      LogFmt(llWarn, 'evdev: grab failed for %s (continuing without grab): errno %d', [FCfg.Id, -Integer(r)])
+    else
+      LogFmt(llInfo, 'evdev: exclusive grab active for %s', [FCfg.Id]);
   end;
   LogFmt(llInfo, 'evdev: opened %s (%s)', [FCfg.DeviceNode, FCfg.Id]);
   FBackoffMs := 1000;
@@ -196,6 +198,21 @@ procedure TEvdevInput.DrainEvents(ASender: TObject; OnPub: TEvdevPublishEvent);
 var
   ev: TInputEvent;
   st: cint;
+
+  procedure HandleNegSt;
+  begin
+    if (-Integer(st)) = ESysEAGAIN then
+      Exit;
+    if (-Integer(st)) = ESysENODEV then
+    begin
+      LogFmt(llWarn, 'evdev: device removed for %s, reopening', [FCfg.Id]);
+      CloseLocked;
+      FNextTryTick := GetTickCount64 + 500;
+      Exit;
+    end;
+    LogFmt(llWarn, 'evdev: libevdev_next_event errno %d on %s', [-Integer(st), FCfg.Id]);
+  end;
+
 begin
   if FDev = nil then
     Exit;
@@ -204,19 +221,28 @@ begin
     st := libevdev_next_event(FDev, LIBEVDEV_READ_FLAG_NORMAL, @ev);
     if st < 0 then
     begin
-      if (-Integer(st)) = ESysEAGAIN then
-        Break;
-      if (-Integer(st)) = ESysENODEV then
-      begin
-        LogFmt(llWarn, 'evdev: device removed for %s, reopening', [FCfg.Id]);
-        CloseLocked;
-        FNextTryTick := GetTickCount64 + 500;
-        Break;
-      end;
-      LogFmt(llWarn, 'evdev: libevdev_next_event errno %d on %s', [-Integer(st), FCfg.Id]);
+      HandleNegSt;
       Break;
     end;
-    if (st = LIBEVDEV_READ_STATUS_SUCCESS) or (st = LIBEVDEV_READ_STATUS_SYNC) then
+    if st = LIBEVDEV_READ_STATUS_SYNC then
+    begin
+      { SYN_DROPPED (or similar): emit the marker event, then drain state with READ_FLAG_SYNC. }
+      OnPub(ASender, FCfg.MqttTopic, FormatEventJson(ev));
+      while True do
+      begin
+        st := libevdev_next_event(FDev, LIBEVDEV_READ_FLAG_SYNC, @ev);
+        if st < 0 then
+        begin
+          if (-Integer(st)) <> ESysEAGAIN then
+            LogFmt(llWarn, 'evdev: sync drain errno %d on %s', [-Integer(st), FCfg.Id]);
+          Break;
+        end;
+        if st = LIBEVDEV_READ_STATUS_SYNC then
+          OnPub(ASender, FCfg.MqttTopic, FormatEventJson(ev));
+      end;
+      Continue;
+    end;
+    if st = LIBEVDEV_READ_STATUS_SUCCESS then
       OnPub(ASender, FCfg.MqttTopic, FormatEventJson(ev));
   end;
 end;

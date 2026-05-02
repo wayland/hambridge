@@ -28,9 +28,14 @@ type
 const
   LIBEVDEV_MODE_GRAB = 3;   { libevdev_grab: exclusive input grab }
   LIBEVDEV_MODE_UNGRAB = 4;
-  LIBEVDEV_READ_FLAG_NORMAL = 0;
-  LIBEVDEV_READ_STATUS_SUCCESS = 1; { Event read OK }
-  LIBEVDEV_READ_STATUS_SYNC = 2;    { Force-synced state after SYN_DROPPED }
+  { libevdev_read_flag — bitmask passed *into* libevdev_next_event (libevdev ≥ 1.3). }
+  LIBEVDEV_READ_FLAG_SYNC = 1;
+  LIBEVDEV_READ_FLAG_NORMAL = 2;
+  LIBEVDEV_READ_FLAG_FORCE_SYNC = 4;
+  LIBEVDEV_READ_FLAG_BLOCKING = 8;
+  { libevdev_read_status — return value *from* libevdev_next_event on success path. }
+  LIBEVDEV_READ_STATUS_SUCCESS = 0;
+  LIBEVDEV_READ_STATUS_SYNC = 1;
 
 {
   The following declarations mirror libevdev C API: allocate context, attach fd, read events,
