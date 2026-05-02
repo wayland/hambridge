@@ -1,5 +1,8 @@
-# Build output
+# Build output (includes downloaded MQTT client under build/deps/)
 /build/
+
+# Optional: ignore a leftover vendored clone from older workflows
+/third_party/fpc-mqtt-client/
 /bin/
 hambridge
 

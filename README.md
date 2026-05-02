@@ -7,8 +7,10 @@ architecture is described in [Visca-MQTT-bridge-Plan.md](Visca-MQTT-bridge-Plan.
 The v0.1 binary is **`hambridge`**; systemd and packaging use the **HaMBridge** product name and
 `/etc/hambridge/` for configuration.
 
-To **build from source**, see [DEVELOPING.md](DEVELOPING.md). Packaging helpers (systemd, udev,
-sysusers) live under [packaging/](packaging/).
+To **build from source**, see [DEVELOPING.md](DEVELOPING.md). The first `make` run downloads a
+pinned [fpc-mqtt-client](https://github.com/prof7bit/fpc-mqtt-client) release (needs `curl`,
+`unzip`, and network access). Packaging helpers (systemd, udev, sysusers) live under
+[packaging/](packaging/).
 
 ## Roadmap
 

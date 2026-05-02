@@ -11,8 +11,12 @@ The product name is **HaMBridge**; the v0.1 build produces the `hambridge` binar
 - **Linux** (v0.1 is Linux-only because of `libevdev`).
 - **Free Pascal Compiler** 3.2.x or newer (`fpc`).
 - **GNU Make** (`make`).
+- **`curl`** and **`unzip`** — used once per clean tree to fetch the MQTT client zip.
 - **MQTT client**: [prof7bit/fpc-mqtt-client](https://github.com/prof7bit/fpc-mqtt-client) is
-  included under `third_party/fpc-mqtt-client/` for reproducible offline builds.
+  **downloaded when you run `make`**: the Makefile fetches a pinned release zip into
+  `build/deps/`, checks **SHA256**, and unpacks it. The first build needs **network access**,
+  `curl`, and `unzip`. Bump the tag and checksum in the `Makefile` when you intentionally
+  upgrade the client.
 - **`libevdev` shared library** (`libevdev.so.2`) in a standard library directory so the
   Makefile can link against it:
 
@@ -39,6 +43,11 @@ make run        # runs against ./bridge.json + ./devices.json
 The Makefile invokes `fpc` with `-k-L<libdir> -k-l:libevdev.so.2` when it finds that shared
 library under `/usr/lib64` or `/usr/lib/x86_64-linux-gnu`. Recommended compiler flags are
 documented in the plan (§5.1).
+
+**Fully offline builds:** after a successful `make` on a networked machine, the zip under
+`build/deps/fpc-mqtt-client-*.zip` matches the `FPC_MQTT_SHA256` line in the `Makefile`. You can
+copy that zip into the same path on an air-gapped tree (before `make`) so `curl` is never
+invoked; `sha256sum` still validates the file before unzip.
 
 ## Source layout (v0.1)
 

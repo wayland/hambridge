@@ -1,9 +1,17 @@
 # HaMBridge v0.1 — Free Pascal build
 FPC ?= fpc
 SRCDIR := src
-MQTTDIR := third_party/fpc-mqtt-client/mqtt
 OUTDIR := build
 BINARY := $(OUTDIR)/hambridge
+
+# prof7bit/fpc-mqtt-client — downloaded at build time (see $(MQTTDIR) rule); not vendored in git.
+FPC_MQTT_TAG := 1.2
+FPC_MQTT_URL := https://github.com/prof7bit/fpc-mqtt-client/archive/refs/tags/$(FPC_MQTT_TAG).zip
+# sha256sum of the release zip (update when bumping FPC_MQTT_TAG).
+FPC_MQTT_SHA256 := 702ded75607d2ba8429fffc3509bbb7607466be9596bc23d8bd73c13f8e74214
+MQTTZIP := $(OUTDIR)/deps/fpc-mqtt-client-$(FPC_MQTT_TAG).zip
+MQTT_EXTRACT := $(OUTDIR)/deps/fpc-mqtt-client-$(FPC_MQTT_TAG)
+MQTTDIR := $(MQTT_EXTRACT)/mqtt
 
 FPCFLAGS := -MObjFPC -Scghi -O2 -gl -Xs
 FPCFLAGS += -Fu$(SRCDIR) -Fu$(MQTTDIR) -FU$(OUTDIR)
@@ -23,7 +31,20 @@ all: $(BINARY)
 $(OUTDIR):
 	mkdir -p $(OUTDIR)
 
-$(BINARY): $(OUTDIR) $(SRCDIR)/hambridge.lpr $(wildcard $(SRCDIR)/*.pas) $(wildcard $(MQTTDIR)/*.pas)
+# Fetch and verify MQTT client sources (first build needs network: curl + unzip).
+$(MQTTDIR)/mqtt.pas: | $(OUTDIR)
+	@set -e; \
+	mkdir -p $(dir $(MQTTZIP)); \
+	if [ ! -f '$(MQTTZIP)' ]; then \
+	  tmp="$(MQTTZIP).$$$$.part"; \
+	  curl -fsSL -o "$$tmp" '$(FPC_MQTT_URL)'; \
+	  mv -f "$$tmp" '$(MQTTZIP)'; \
+	fi; \
+	echo '$(FPC_MQTT_SHA256)  $(MQTTZIP)' | sha256sum -c -; \
+	rm -rf '$(MQTT_EXTRACT)'; \
+	unzip -qo '$(MQTTZIP)' -d '$(OUTDIR)/deps'
+
+$(BINARY): $(OUTDIR) $(MQTTDIR)/mqtt.pas $(SRCDIR)/hambridge.lpr $(wildcard $(SRCDIR)/*.pas) $(wildcard $(MQTTDIR)/*.pas)
 	$(FPC) $(FPCFLAGS) -o$(BINARY) $(SRCDIR)/hambridge.lpr
 
 clean:

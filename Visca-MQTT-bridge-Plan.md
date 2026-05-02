@@ -731,7 +731,7 @@ used to author code, but project files (`.lpi`, `.lpr`, `.lps`) are **not** comm
 ### Repository layout
 
 ```
-/Makefile
+/Makefile                      # also downloads prof7bit/fpc-mqtt-client (pinned zip + SHA256) into build/deps/
 /README.md
 /DEVELOPING.md
 /.gitignore
@@ -781,9 +781,13 @@ Unit responsibilities for v0.1:
 
 * **`make`** (default) — builds `hambridge` into `./build/` using `fpc`, linking
   `libevdev.so.2` via `-l:libevdev.so.2` and a discovered `-L` path (Fedora `/usr/lib64`,
-  Debian multiarch `/usr/lib/x86_64-linux-gnu`). Recommended flags: `-MObjFPC -Scghi -O2 -Xs -gl`
-  (Object Pascal mode, line info for stack traces, optimisation, strip after link).
-* **`make clean`** — removes `./build/` and stray `.o` / `.ppu` files.
+  Debian multiarch `/usr/lib/x86_64-linux-gnu`). Before compiling, downloads the pinned
+  **`prof7bit/fpc-mqtt-client`** release zip into `./build/deps/`, verifies **SHA256**, and
+  unpacks it (first build needs **network**, **`curl`**, and **`unzip`**). Recommended flags:
+  `-MObjFPC -Scghi -O2 -Xs -gl` (Object Pascal mode, line info for stack traces, optimisation,
+  strip after link).
+* **`make clean`** — removes `./build/` (including downloaded MQTT sources) and stray `.o` /
+  `.ppu` files.
 * **`make run`** — convenience target: `./build/hambridge --config ./bridge.json
   --devices ./devices.json`.
 * **`make install`** *(optional, post-v0.1)* — install binary to `/usr/local/bin` and example
@@ -814,7 +818,9 @@ Dependencies are listed alongside the phase that introduces them. v0.1 has the s
 
 ## v0.1 (required)
 
-* **MQTT client**: **`prof7bit/fpc-mqtt-client`** (preferred) — pure Pascal MQTT v5 client.
+* **MQTT client**: **`prof7bit/fpc-mqtt-client`** (preferred) — pure Pascal MQTT v5 client;
+  **not** committed in-tree: `make` downloads a **tag-pinned** zip, checks **SHA256**, unpacks
+  under `./build/deps/` (see `Makefile`).
 * **JSON**: `fpjson` + `jsonparser` (FCL, ships with FPC) — used to load `bridge.json` /
   `devices.json` and to encode evdev event payloads.
 * **libevdev** (Linux only): the C library `libevdev`, linked at build time as `-l:libevdev.so.2`
