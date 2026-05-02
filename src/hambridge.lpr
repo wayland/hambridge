@@ -1,8 +1,7 @@
 program hambridge;
 
 {
-  HaMBridge v0.1 entry: parse args, load bridge.json + devices.json, wire evdev hub to MQTT
-  publisher, run until SIGINT/SIGTERM.
+  HaMBridge v0.2 entry: bridge.json + devices.json; optional evdev→MQTT (v0.1) and MQTT device/#→VISCA (v0.2).
 }
 
 {$mode ObjFPC}{$H+}
@@ -12,42 +11,38 @@ uses
   cthreads,
   {$ENDIF}
   SysUtils, Classes, BaseUnix, Unix,
-  config, devicesconfig, logger, evdevreader, mqttpublisher, mainloop;
+  config, devicesconfig, logger, evdevreader, mqttpublisher, mainloop,
+  viscamapping, commandrouter;
 
 const
-  AppVersion = '0.1.0';
+  AppVersion = '0.2.0';
 
 var
-  GStop: Boolean = False;  { Set by signal handler; read by RunEvdevMqttLoop }
+  GStop: Boolean = False;
 
-{ POSIX signal handler: must stay tiny and async-signal-safe; only flips a Boolean. }
 procedure SigHandler(sig: longint); cdecl;
 begin
   GStop := True;
 end;
 
 type
-  { Holds THaMqttPublisher reference so OnEvdev can be a method pointer for the evdev callback. }
   TRun = class
     Mqtt: THaMqttPublisher;
     constructor Create(AM: THaMqttPublisher);
     procedure OnEvdev(Sender: TObject; const Topic, Json: string);
   end;
 
-{ Captures publisher reference for the evdev→MQTT bridge method. }
 constructor TRun.Create(AM: THaMqttPublisher);
 begin
   inherited Create;
   Mqtt := AM;
 end;
 
-{ Bridges evdevreader callback into MQTT publish (single hop so mainloop stays generic). }
 procedure TRun.OnEvdev(Sender: TObject; const Topic, Json: string);
 begin
   Mqtt.PublishJson(Topic, Json);
 end;
 
-{ Writes --help text to stdout (kept tiny so it is safe to call from unknown-arg paths). }
 procedure PrintHelp;
 begin
   WriteLn('HaMBridge (Hardware-MQTT Bridge) ', AppVersion);
@@ -55,7 +50,6 @@ begin
   WriteLn('See README.md and Visca-MQTT-bridge-Plan.md.');
 end;
 
-{ Registers minimal handlers so systemd or a terminal Ctrl+C can stop the main loop cleanly. }
 procedure InstallSignals;
 begin
   FpSignal(SIGTERM, @SigHandler);
@@ -63,8 +57,7 @@ begin
 end;
 
 var
-  { Resolved config paths, CLI accumulators, loaded records, and runtime objects. }
-  BridgePath, DevPath: string;
+  BridgePath, DevPath, MapPath: string;
   CliBridge, CliDev: string;
   I: Integer;
   B: TBridgeConfig;
@@ -72,6 +65,9 @@ var
   Hub: TEvdevHub;
   Mqtt: THaMqttPublisher;
   Runner: TRun;
+  VMap: TViscaMapping;
+  Router: TCommandRouter;
+  hasEvdev, hasVisca: Boolean;
 begin
   CliBridge := '';
   CliDev := '';
@@ -125,33 +121,52 @@ begin
   LogFmt(llInfo, 'Using bridge config %s', [BridgePath]);
   D := LoadDevicesConfig(DevPath);
   LogFmt(llInfo, 'Using devices config %s', [DevPath]);
+  ValidateDevicesConfig(D);
 
-  if not D.EvdevEnabled then
+  hasEvdev := D.EvdevEnabled and (Length(D.EvdevInputs) > 0);
+  hasVisca := Length(D.ViscaDevices) > 0;
+  if not hasEvdev and not hasVisca then
   begin
-    Log(llError, 'devices.json: evdev.enabled must be true for v0.1');
+    Log(llError, 'devices.json: enable evdev with non-empty inputs, and/or configure buses+VISCA devices');
     Halt(1);
   end;
-  if Length(D.EvdevInputs) = 0 then
+
+  VMap := nil;
+  Router := nil;
+  if hasVisca then
   begin
-    Log(llError, 'devices.json: evdev.inputs must be non-empty when enabled');
-    Halt(1);
+    MapPath := DiscoverViscaMappingPath(DevPath, D);
+    if MapPath = '' then
+    begin
+      Log(llError, 'visca-mapping.json not found (set viscaMapping in devices.json, place file beside devices.json, or set BRIDGE_VISCA_MAPPING)');
+      Halt(1);
+    end;
+    LogFmt(llInfo, 'Using VISCA mapping %s', [MapPath]);
+    VMap := TViscaMapping.Create(MapPath);
+    Router := TCommandRouter.Create(D, VMap);
   end;
 
   Mqtt := THaMqttPublisher.Create(B);
+  if Router <> nil then
+    Mqtt.OnDeviceMessage := @Router.OnMqttDeviceMessage;
   Hub := TEvdevHub.Create;
   try
-    Hub.AddFromConfig(D);
+    if hasEvdev then
+      Hub.AddFromConfig(D);
     Runner := TRun.Create(Mqtt);
     try
       InstallSignals;
       Log(llInfo, 'Starting main loop (Ctrl+C or SIGTERM to exit)');
-      RunEvdevMqttLoop(Hub, Mqtt, Runner, @Runner.OnEvdev, GStop);
+      RunHaMBridgeLoop(Hub, Mqtt, Router, Runner, @Runner.OnEvdev, GStop);
     finally
       Log(llInfo, 'Shutting down');
+      Mqtt.OnDeviceMessage := nil;
       Mqtt.ShutdownPublishLwt;
       Runner.Free;
     end;
   finally
+    Router.Free;
+    VMap.Free;
     Hub.Free;
     Mqtt.Free;
   end;

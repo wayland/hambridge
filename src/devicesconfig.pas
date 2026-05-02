@@ -1,8 +1,7 @@
 unit devicesconfig;
 
 {
-  Loads devices.json (plan §3.1): v0.1 only uses the "evdev" block; buses/devices are reserved
-  for later VISCA phases.
+  Loads devices.json (plan §3.1): evdev block (v0.1), buses + VISCA devices + viscaMapping (v0.2).
 }
 
 {$mode ObjFPC}{$H+}
@@ -13,37 +12,64 @@ uses
   SysUtils, Classes, fpjson, jsonparser;
 
 type
-  { One evdev input row from devices.json "evdev.inputs" array. }
   TEvdevInputConfig = record
-    Id: string;              { Stable id for logs and default MQTT topic segment }
-    DeviceNode: string;      { Kernel path e.g. /dev/input/eventN }
-    GrabExclusive: Boolean;  { If true, attempt EVIOCGRAB so only this process sees events }
-    MqttTopic: string;       { MQTT topic for this stream; default filled as evdev/<id>/event if empty }
+    Id: string;
+    DeviceNode: string;
+    GrabExclusive: Boolean;
+    MqttTopic: string;
   end;
 
-  { devices.json evdev section: enabled flag plus list of inputs. }
+  TSerialBusConfig = record
+    Id: string;
+    Port: string;
+    Baud: Integer;
+    DataBits: Integer;
+    Parity: Char;
+    StopBits: Integer;
+  end;
+
+  TViscaDeviceConfig = record
+    Id: string;
+    Model: string;
+    BusId: string;
+    ViscaAddress: Byte;
+    MinInterCommandMs: Cardinal;
+    MaxQueueDepth: Cardinal;
+  end;
+
+  TSerialBusDyn = array of TSerialBusConfig;
+  TViscaDeviceDyn = array of TViscaDeviceConfig;
+
   TDevicesConfig = record
-    EvdevEnabled: Boolean;                    { devices.json "evdev.enabled" }
-    EvdevInputs: array of TEvdevInputConfig;  { devices.json "evdev.inputs" }
+    EvdevEnabled: Boolean;
+    EvdevInputs: array of TEvdevInputConfig;
+    Buses: TSerialBusDyn;
+    ViscaDevices: TViscaDeviceDyn;
+    ViscaMappingPath: string;
   end;
 
-{ See implementation: discovery order for devices.json. }
 function FindDevicesConfigPath(const CliPath: string): string;
-{ Parses evdev section and fills TDevicesConfig; raises on invalid shape. }
 function LoadDevicesConfig(const Path: string): TDevicesConfig;
+{ Raises if evdev or VISCA sections are internally inconsistent. }
+procedure ValidateDevicesConfig(const D: TDevicesConfig);
+{ Resolves visca-mapping.json: env BRIDGE_VISCA_MAPPING, devices.viscaMapping, beside devices.json, cwd, /etc/hambridge. }
+function DiscoverViscaMappingPath(const DevicesJsonPath: string; const D: TDevicesConfig): string;
 
 implementation
 
 uses
-  jsonutil;
+  jsonutil, Math;
 
-{ Same semantics as config.FileExistsReadable — local helper to avoid cross-unit coupling. }
+function PathIsAbsolute(const P: string): Boolean;
+begin
+  Result := (P <> '') and (P[1] = '/');
+end;
+
 function FileExistsReadable(const Path: string): Boolean;
 begin
   Result := (Path <> '') and FileExists(Path);
 end;
 
-{ Resolves devices.json: --devices, BRIDGE_DEVICES, ./devices.json, /etc/hambridge/devices.json. }
 function FindDevicesConfigPath(const CliPath: string): string;
 begin
   if FileExistsReadable(CliPath) then
@@ -57,7 +83,6 @@ begin
   Result := '';
 end;
 
-{ Case-insensitive JSON string (or bool-as-string) reader for device config keys. }
 function JsonGetString(Obj: TJSONObject; const Key: string; const Default: string = ''): string;
 var
   Data: TJSONData;
@@ -71,10 +96,11 @@ begin
     Exit(TJSONString(Data).AsString);
   if Data is TJSONBoolean then
     Exit(BoolToStr(TJSONBoolean(Data).AsBoolean, 'true', 'false'));
+  if Data is TJSONNumber then
+    Exit(IntToStr(TJSONNumber(Data).AsInteger));
   Result := Default;
 end;
 
-{ Reads boolean from JSON with string/bool coercion (same pattern as config unit). }
 function JsonGetBool(Obj: TJSONObject; const Key: string; Default: Boolean): Boolean;
 var
   Data: TJSONData;
@@ -91,8 +117,116 @@ begin
   Result := Default;
 end;
 
-{ Parses devices.json; requires "evdev" object with "inputs" array; validates id and deviceNode;
-  fills default mqttTopic when omitted. }
+function JsonGetInt(Obj: TJSONObject; const Key: string; Default: Integer): Integer;
+var
+  Data: TJSONData;
+begin
+  Data := ObjFindCI(Obj, Key);
+  if Data = nil then
+    Exit(Default);
+  if Data is TJSONNumber then
+    Exit(Integer(TJSONNumber(Data).AsInteger));
+  if Data is TJSONString then
+    Exit(StrToIntDef(TJSONString(Data).AsString, Default));
+  Result := Default;
+end;
+
+function JsonGetIdString(Item: TJSONObject): string;
+var
+  Data: TJSONData;
+begin
+  Data := ObjFindCI(Item, 'id');
+  if Data = nil then
+    raise Exception.Create('devices.json: device entry missing "id"');
+  if Data is TJSONNumber then
+    Exit(IntToStr(TJSONNumber(Data).AsInteger))
+  else if Data is TJSONString then
+    Exit(TJSONString(Data).AsString)
+  else
+    raise Exception.Create('devices.json: device "id" must be string or number');
+end;
+
+function JsonGetChar(Obj: TJSONObject; const Key: string; Default: Char): Char;
+var
+  S: string;
+begin
+  S := Trim(JsonGetString(Obj, Key, ''));
+  if S = '' then
+    Exit(Default);
+  Result := S[1];
+end;
+
+procedure LoadBuses(Root: TJSONObject; var Buses: TSerialBusDyn);
+var
+  BObj: TJSONObject;
+  I: Integer;
+  Name: string;
+  Row: TJSONObject;
+begin
+  SetLength(Buses, 0);
+  BObj := ObjGetObjectCI(Root, 'buses');
+  if BObj = nil then
+    Exit;
+  SetLength(Buses, BObj.Count);
+  for I := 0 to BObj.Count - 1 do
+  begin
+    Name := BObj.Names[I];
+    Buses[I].Id := Name;
+    if not (BObj.Items[I] is TJSONObject) then
+      raise Exception.Create('devices.json: buses.' + Name + ' must be an object');
+    Row := TJSONObject(BObj.Items[I]);
+    Buses[I].Port := JsonGetString(Row, 'port', '');
+    Buses[I].Baud := JsonGetInt(Row, 'baud', 9600);
+    Buses[I].DataBits := JsonGetInt(Row, 'dataBits', 8);
+    Buses[I].Parity := JsonGetChar(Row, 'parity', 'N');
+    Buses[I].StopBits := JsonGetInt(Row, 'stopBits', 1);
+    if Buses[I].Port = '' then
+      raise Exception.Create('devices.json: bus "' + Name + '" needs port');
+  end;
+end;
+
+procedure LoadViscaDevices(Root: TJSONObject; var Devs: TViscaDeviceDyn);
+var
+  Arr: TJSONArray;
+  I: Integer;
+  Item: TJSONObject;
+  Sch: TJSONObject;
+  addr: Integer;
+begin
+  SetLength(Devs, 0);
+  if not (ObjFindCI(Root, 'devices') is TJSONArray) then
+    Exit;
+  Arr := TJSONArray(ObjFindCI(Root, 'devices'));
+  SetLength(Devs, Arr.Count);
+  for I := 0 to Arr.Count - 1 do
+  begin
+    if not (Arr.Items[I] is TJSONObject) then
+      raise Exception.Create('devices.json: devices[' + IntToStr(I) + '] must be an object');
+    Item := TJSONObject(Arr.Items[I]);
+    Devs[I].Id := JsonGetIdString(Item);
+    Devs[I].Model := JsonGetString(Item, 'model', '');
+    Devs[I].BusId := JsonGetString(Item, 'bus', '');
+    addr := JsonGetInt(Item, 'viscaAddress', 1);
+    if addr < 1 then
+      addr := 1;
+    if addr > 7 then
+      addr := 7;
+    Devs[I].ViscaAddress := Byte(addr);
+    Devs[I].MinInterCommandMs := 40;
+    Devs[I].MaxQueueDepth := 50;
+    Sch := ObjGetObjectCI(Item, 'scheduler');
+    if Sch <> nil then
+    begin
+      Devs[I].MinInterCommandMs := Cardinal(Max(1, JsonGetInt(Sch, 'minInterCommandMs', 40)));
+      Devs[I].MaxQueueDepth := Cardinal(Max(1, JsonGetInt(Sch, 'maxQueueDepth', 50)));
+    end;
+    if Devs[I].Model = '' then
+      raise Exception.Create('devices.json: VISCA device "' + Devs[I].Id + '" needs model');
+    if Devs[I].BusId = '' then
+      raise Exception.Create('devices.json: VISCA device "' + Devs[I].Id + '" needs bus');
+  end;
+end;
+
 function LoadDevicesConfig(const Path: string): TDevicesConfig;
 var
   Parser: TJSONParser;
@@ -122,33 +256,105 @@ begin
   end;
   Root := TJSONObject(Data);
   try
+    LoadBuses(Root, Result.Buses);
+    LoadViscaDevices(Root, Result.ViscaDevices);
+    Result.ViscaMappingPath := JsonGetString(Root, 'viscaMapping', '');
+    if Result.ViscaMappingPath = '' then
+      Result.ViscaMappingPath := JsonGetString(Root, 'visca_mapping', '');
+
     Ev := ObjGetObjectCI(Root, 'evdev');
     if Ev = nil then
-      raise Exception.Create('devices.json: missing "evdev" object');
-    Result.EvdevEnabled := JsonGetBool(Ev, 'enabled', False);
-    if not (ObjFindCI(Ev, 'inputs') is TJSONArray) then
-      raise Exception.Create('devices.json: evdev.inputs must be an array');
-    Arr := TJSONArray(ObjFindCI(Ev, 'inputs'));
-    SetLength(Result.EvdevInputs, Arr.Count);
-    for I := 0 to Arr.Count - 1 do
     begin
-      if not (Arr.Items[I] is TJSONObject) then
-        raise Exception.Create('devices.json: evdev.inputs[' + IntToStr(I) + '] must be an object');
-      Item := TJSONObject(Arr.Items[I]);
-      Result.EvdevInputs[I].Id := JsonGetString(Item, 'id', '');
-      Result.EvdevInputs[I].DeviceNode := JsonGetString(Item, 'deviceNode', '');
-      Result.EvdevInputs[I].GrabExclusive := JsonGetBool(Item, 'grabExclusive', False);
-      Result.EvdevInputs[I].MqttTopic := JsonGetString(Item, 'mqttTopic', '');
-      if Result.EvdevInputs[I].Id = '' then
-        raise Exception.Create('devices.json: each evdev input needs "id"');
-      if Result.EvdevInputs[I].DeviceNode = '' then
-        raise Exception.Create('devices.json: input "' + Result.EvdevInputs[I].Id + '" needs deviceNode');
-      if Trim(Result.EvdevInputs[I].MqttTopic) = '' then
-        Result.EvdevInputs[I].MqttTopic := 'evdev/' + Result.EvdevInputs[I].Id + '/event';
+      Result.EvdevEnabled := False;
+      SetLength(Result.EvdevInputs, 0);
+    end
+    else
+    begin
+      Result.EvdevEnabled := JsonGetBool(Ev, 'enabled', False);
+      if not (ObjFindCI(Ev, 'inputs') is TJSONArray) then
+        raise Exception.Create('devices.json: evdev.inputs must be an array');
+      Arr := TJSONArray(ObjFindCI(Ev, 'inputs'));
+      SetLength(Result.EvdevInputs, Arr.Count);
+      for I := 0 to Arr.Count - 1 do
+      begin
+        if not (Arr.Items[I] is TJSONObject) then
+          raise Exception.Create('devices.json: evdev.inputs[' + IntToStr(I) + '] must be an object');
+        Item := TJSONObject(Arr.Items[I]);
+        Result.EvdevInputs[I].Id := JsonGetString(Item, 'id', '');
+        Result.EvdevInputs[I].DeviceNode := JsonGetString(Item, 'deviceNode', '');
+        Result.EvdevInputs[I].GrabExclusive := JsonGetBool(Item, 'grabExclusive', False);
+        Result.EvdevInputs[I].MqttTopic := JsonGetString(Item, 'mqttTopic', '');
+        if Result.EvdevInputs[I].Id = '' then
+          raise Exception.Create('devices.json: each evdev input needs "id"');
+        if Result.EvdevInputs[I].DeviceNode = '' then
+          raise Exception.Create('devices.json: input "' + Result.EvdevInputs[I].Id + '" needs deviceNode');
+        if Trim(Result.EvdevInputs[I].MqttTopic) = '' then
+          Result.EvdevInputs[I].MqttTopic := 'evdev/' + Result.EvdevInputs[I].Id + '/event';
+      end;
     end;
   finally
     Root.Free;
   end;
+end;
+
+procedure ValidateDevicesConfig(const D: TDevicesConfig);
+var
+  I, J: Integer;
+  ok: Boolean;
+begin
+  if D.EvdevEnabled and (Length(D.EvdevInputs) = 0) then
+    raise Exception.Create('devices.json: evdev.enabled is true but evdev.inputs is empty');
+  if (Length(D.ViscaDevices) > 0) and (Length(D.Buses) = 0) then
+    raise Exception.Create('devices.json: VISCA devices require at least one bus in "buses"');
+  for I := 0 to High(D.ViscaDevices) do
+  begin
+    ok := False;
+    for J := 0 to High(D.Buses) do
+      if SameText(D.Buses[J].Id, D.ViscaDevices[I].BusId) then
+      begin
+        ok := True;
+        Break;
+      end;
+    if not ok then
+      raise Exception.Create('devices.json: VISCA device "' + D.ViscaDevices[I].Id +
+        '" references unknown bus "' + D.ViscaDevices[I].BusId + '"');
+  end;
+end;
+
+function DiscoverViscaMappingPath(const DevicesJsonPath: string; const D: TDevicesConfig): string;
+var
+  e, cand, base: string;
+begin
+  Result := '';
+  e := Trim(GetEnvironmentVariable('BRIDGE_VISCA_MAPPING'));
+  if (e <> '') and FileExists(e) then
+    Exit(e);
+  if Trim(D.ViscaMappingPath) <> '' then
+  begin
+    cand := D.ViscaMappingPath;
+    if not PathIsAbsolute(cand) then
+    begin
+      base := ExtractFileDir(DevicesJsonPath);
+      if base <> '' then
+        cand := IncludeTrailingPathDelimiter(base) + cand
+      else
+        cand := cand;
+    end;
+    if FileExists(cand) then
+      Exit(cand);
+  end;
+  base := ExtractFileDir(DevicesJsonPath);
+  if base <> '' then
+  begin
+    cand := IncludeTrailingPathDelimiter(base) + 'visca-mapping.json';
+    if FileExists(cand) then
+      Exit(cand);
+  end;
+  if FileExists('visca-mapping.json') then
+    Exit('visca-mapping.json');
+  cand := '/etc/hambridge/visca-mapping.json';
+  if FileExists(cand) then
+    Exit(cand);
 end;
 
 end.

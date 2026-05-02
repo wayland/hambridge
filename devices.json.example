@@ -1,6 +1,26 @@
 {
-  "buses": [],
-  "devices": [],
+  "viscaMapping": "visca-mapping.json",
+  "buses": {
+    "rs485-1": {
+      "port": "/dev/ttyUSB0",
+      "baud": 9600,
+      "dataBits": 8,
+      "parity": "N",
+      "stopBits": 1
+    }
+  },
+  "devices": [
+    {
+      "id": 1,
+      "model": "marshall-cv344",
+      "bus": "rs485-1",
+      "viscaAddress": 1,
+      "scheduler": {
+        "minInterCommandMs": 50,
+        "maxQueueDepth": 50
+      }
+    }
+  ],
   "evdev": {
     "enabled": true,
     "inputs": [
@@ -12,5 +32,5 @@
       }
     ]
   },
-  "_note": "Copy to devices.json. Set evdev.inputs[].deviceNode to a /dev/input/event* node your user can read; omit mqttTopic to use the default evdev/<id>/event."
+  "_note": "Copy to devices.json. For VISCA-only, set evdev.enabled false and inputs []. Set viscaMapping or place visca-mapping.json beside this file. Control topics: device/<id>/<command> (e.g. device/1/preset/call)."
 }

@@ -1,8 +1,8 @@
 unit mainloop;
 
 {
-  Single-threaded glue: poll evdev fds, drain ready devices into OnEvdev, tick MQTT reconnect
-  and CheckSynchronize between waits. Exits when WantStop becomes true (signal handler).
+  Single-threaded glue: poll evdev fds (optional), drain MQTT sync queue, tick VISCA command router,
+  exit when WantStop becomes true (signal handler).
 }
 
 {$mode ObjFPC}{$H+}
@@ -11,23 +11,15 @@ interface
 
 uses
   SysUtils, Classes, ctypes, BaseUnix,
-  evdevreader, mqttpublisher;
+  evdevreader, mqttpublisher, commandrouter;
 
-procedure RunEvdevMqttLoop(Hub: TEvdevHub; Mqtt: THaMqttPublisher; ASender: TObject;
-  OnEvdev: TEvdevPublishEvent; var WantStop: Boolean);
+procedure RunHaMBridgeLoop(Hub: TEvdevHub; Mqtt: THaMqttPublisher; Router: TCommandRouter;
+  ASender: TObject; OnEvdev: TEvdevPublishEvent; var WantStop: Boolean);
 
 implementation
 
-uses
-  Unix;
-
-{
-  Main process loop for v0.1: no secondary threads in our code (MQTT client library may use
-  threads internally — ProcessSynchronize drains their sync queue). 50 ms poll timeout keeps
-  latency bounded while idle.
-}
-procedure RunEvdevMqttLoop(Hub: TEvdevHub; Mqtt: THaMqttPublisher; ASender: TObject;
-  OnEvdev: TEvdevPublishEvent; var WantStop: Boolean);
+procedure RunHaMBridgeLoop(Hub: TEvdevHub; Mqtt: THaMqttPublisher; Router: TCommandRouter;
+  ASender: TObject; OnEvdev: TEvdevPublishEvent; var WantStop: Boolean);
 var
   List: TFPList;
   Fds: array of TPollfd;
@@ -40,8 +32,14 @@ begin
     begin
       Mqtt.TickReconnect;
       Mqtt.ProcessSynchronize;
-      Hub.TickAll;
-      Hub.BuildPollFds(List);
+      if Router <> nil then
+        Router.Tick;
+      if Hub <> nil then
+        Hub.TickAll;
+      if Hub <> nil then
+        Hub.BuildPollFds(List)
+      else
+        List.Clear;
       N := List.Count;
       SetLength(Fds, N);
       for I := 0 to N - 1 do
@@ -58,7 +56,7 @@ begin
         Sleep(50);
         Pr := 0;
       end;
-      if Pr > 0 then
+      if (Pr > 0) and (Hub <> nil) then
       begin
         for I := 0 to N - 1 do
           if (Fds[I].revents and (POLLIN or POLLPRI)) <> 0 then

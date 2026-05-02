@@ -13,6 +13,8 @@ uses
   SysUtils, Classes, mqtt, config, logger;
 
 type
+  THaMqttDeviceMessageEvent = procedure(Sender: TObject; const Topic, Payload: string) of object;
+
   { Application-facing MQTT facade: owns one TMQTTClient and bridges config + logging. }
   THaMqttPublisher = class
   private
@@ -20,9 +22,11 @@ type
     FClient: TMQTTClient;          { Vendored MQTT v5 client instance }
     FLastConnectAttempt: QWord;    { GetTickCount64 of last Connect attempt }
     FConnectBackoffMs: Cardinal;   { Delay between retries; doubles on failure up to cap }
+    FOnDeviceMessage: THaMqttDeviceMessageEvent;
     procedure OnConnect(AClient: TMQTTClient);
     procedure OnDisconnect(AClient: TMQTTClient);
     procedure OnDebug(Txt: string);
+    procedure HandleMqttReceive(AClient: TMQTTClient; Msg: TMQTTRXData);
   public
     constructor Create(const ABridge: TBridgeConfig);
     destructor Destroy; override;
@@ -34,6 +38,7 @@ type
     procedure PublishJson(const Topic, Json: string);
     { Call on shutdown before Free: optional LWT publish + disconnect. }
     procedure ShutdownPublishLwt;
+    property OnDeviceMessage: THaMqttDeviceMessageEvent read FOnDeviceMessage write FOnDeviceMessage;
   end;
 
 implementation
@@ -46,10 +51,12 @@ constructor THaMqttPublisher.Create(const ABridge: TBridgeConfig);
 begin
   inherited Create;
   FBridge := ABridge;
+  FOnDeviceMessage := nil;
   FClient := TMQTTClient.Create(nil);
   FClient.OnConnect := @OnConnect;
   FClient.OnDisconnect := @OnDisconnect;
   FClient.OnDebug := @OnDebug;
+  FClient.OnReceive := @HandleMqttReceive;
   FLastConnectAttempt := 0;
   FConnectBackoffMs := 1000;
 end;
@@ -62,11 +69,18 @@ begin
     FClient.OnConnect := nil;
     FClient.OnDisconnect := nil;
     FClient.OnDebug := nil;
+    FClient.OnReceive := nil;
     if FClient.Connected then
       FClient.Disconnect;
     FClient.Free;
   end;
   inherited Destroy;
+end;
+
+procedure THaMqttPublisher.HandleMqttReceive(AClient: TMQTTClient; Msg: TMQTTRXData);
+begin
+  if Assigned(FOnDeviceMessage) then
+    FOnDeviceMessage(Self, Msg.Topic, Msg.Message);
 end;
 
 { Forwards client debug strings to our logger at debug level (signature matches TMQTTDebugFunc). }
@@ -85,6 +99,11 @@ begin
     if AClient.Publish(FBridge.Mqtt.Birth.Topic, FBridge.Mqtt.Birth.Payload, FBridge.Mqtt.Birth.Qos,
       FBridge.Mqtt.Birth.Retain) <> mqeNoError then
       Log(llWarn, 'mqtt: birth publish failed');
+  end;
+  if Assigned(FOnDeviceMessage) then
+  begin
+    if AClient.Subscribe('device/#', 0, 1) <> mqeNoError then
+      Log(llWarn, 'mqtt: subscribe device/# failed');
   end;
 end;
 

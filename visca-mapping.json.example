@@ -1,0 +1,17 @@
+{
+  "models": {
+    "base-visca": {
+      "topics": {
+        "power/on": { "bytes": "81 01 04 00 02 FF" },
+        "power/off": { "bytes": "81 01 04 00 03 FF" }
+      }
+    },
+    "marshall-cv344": {
+      "inherits": "base-visca",
+      "topics": {
+        "preset/call": { "bytes": "81 01 04 3F 02 01 FF" }
+      }
+    }
+  },
+  "_note": "Copy to visca-mapping.json or set viscaMapping in devices.json. First byte 81–87 is rewritten from devices.json viscaAddress ($80+addr). v0.2 ignores MQTT JSON payloads — static frames only."
+}
