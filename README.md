@@ -4,8 +4,8 @@ A headless Linux daemon that bridges **hardware** (Linux evdev input today; VISC
 later releases) **to MQTT**. This repository also tracks the **MQTT ↔ VISCA** roadmap; the
 architecture is described in [Visca-MQTT-bridge-Plan.md](Visca-MQTT-bridge-Plan.md).
 
-The v0.1 binary may still be named `visca-mqtt-bridge` (historical); systemd and packaging use
-the **HaMBridge** name and `/etc/hambridge/` for configuration.
+The v0.1 binary is **`hambridge`**; systemd and packaging use the **HaMBridge** product name and
+`/etc/hambridge/` for configuration.
 
 To **build from source**, see [DEVELOPING.md](DEVELOPING.md). Packaging helpers (systemd, udev,
 sysusers) live under [packaging/](packaging/).
@@ -65,7 +65,7 @@ nodes. Options:
 See [DEVELOPING.md](DEVELOPING.md) for build steps and environment overrides. After building:
 
 ```bash
-./build/visca-mqtt-bridge --config ./bridge.json --devices ./devices.json
+./build/hambridge --config ./bridge.json --devices ./devices.json
 ```
 
 Each kernel event is published as JSON to `evdev/<inputId>/event` (or the configured topic) at

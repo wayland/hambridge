@@ -4,18 +4,25 @@ This document is for **building from source** and contributor-oriented setup. Fo
 project does and how to run a binary you already have, see [README.md](README.md). The full
 design is in [Visca-MQTT-bridge-Plan.md](Visca-MQTT-bridge-Plan.md).
 
-The product name is **HaMBridge**; the v0.1 build target may still be named `visca-mqtt-bridge`.
+The product name is **HaMBridge**; the v0.1 build produces the `hambridge` binary.
 
 ## Toolchain (v0.1)
 
 - **Linux** (v0.1 is Linux-only because of `libevdev`).
 - **Free Pascal Compiler** 3.2.x or newer (`fpc`).
 - **GNU Make** (`make`).
-- **`libevdev` development headers** and the runtime library (link with `-levdev`):
+- **MQTT client**: [prof7bit/fpc-mqtt-client](https://github.com/prof7bit/fpc-mqtt-client) is
+  included under `third_party/fpc-mqtt-client/` for reproducible offline builds.
+- **`libevdev` shared library** (`libevdev.so.2`) in a standard library directory so the
+  Makefile can link against it:
 
-  - Debian / Ubuntu: `sudo apt install libevdev-dev`
-  - Fedora: `sudo dnf install libevdev-devel`
+  - Debian / Ubuntu: `sudo apt install libevdev2` (runtime; enough to **build** and run)
+  - Fedora: `sudo dnf install libevdev`
   - Arch: `sudo pacman -S libevdev`
+
+  The Makefile passes `-l:libevdev.so.2` (no unversioned `libevdev.so` symlink required). Optional
+  **development** packages (`libevdev-dev` / `libevdev-devel`) are only needed if you change the
+  C binding or use other tooling that expects headers.
 
 - An **MQTT broker** for local testing (e.g. Mosquitto).
 
@@ -24,19 +31,20 @@ The product name is **HaMBridge**; the v0.1 build target may still be named `vis
 From the repository root:
 
 ```bash
-make            # builds ./build/visca-mqtt-bridge
+make            # builds ./build/hambridge
 make clean      # removes ./build/
 make run        # runs against ./bridge.json + ./devices.json
 ```
 
-The Makefile invokes `fpc` with `-levdev`. Recommended compiler flags are documented in the
-plan (§5.1).
+The Makefile invokes `fpc` with `-k-L<libdir> -k-l:libevdev.so.2` when it finds that shared
+library under `/usr/lib64` or `/usr/lib/x86_64-linux-gnu`. Recommended compiler flags are
+documented in the plan (§5.1).
 
 ## Source layout (v0.1)
 
 See **§5.1 Build & layout** in `Visca-MQTT-bridge-Plan.md` for the intended `src/` unit list and
 responsibilities (`config.pas`, `devicesconfig.pas`, `evdevreader.pas`, `libevdev_binding.pas`,
-`mainloop.pas`, `mqttpublisher.pas`, `logger.pas`, `visca-mqtt-bridge.lpr`).
+`mainloop.pas`, `mqttpublisher.pas`, `logger.pas`, `hambridge.lpr`).
 
 ## Configuration (development copies)
 
@@ -66,7 +74,7 @@ only the `*.example` variants are tracked.
 ## Run (from a dev build)
 
 ```bash
-./build/visca-mqtt-bridge --config ./bridge.json --devices ./devices.json
+./build/hambridge --config ./bridge.json --devices ./devices.json
 ```
 
 ## systemd / udev (production-style)

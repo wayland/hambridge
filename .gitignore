@@ -1,7 +1,7 @@
 # Build output
 /build/
 /bin/
-visca-mqtt-bridge
+hambridge
 
 # FPC artefacts
 *.o

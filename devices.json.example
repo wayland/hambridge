@@ -1,0 +1,16 @@
+{
+  "buses": [],
+  "devices": [],
+  "evdev": {
+    "enabled": true,
+    "inputs": [
+      {
+        "id": "example",
+        "deviceNode": "/dev/input/event0",
+        "grabExclusive": false,
+        "mqttTopic": "evdev/example/event"
+      }
+    ]
+  },
+  "_note": "Copy to devices.json. Set evdev.inputs[].deviceNode to a /dev/input/event* node your user can read; omit mqttTopic to use the default evdev/<id>/event."
+}

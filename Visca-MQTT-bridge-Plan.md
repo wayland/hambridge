@@ -93,16 +93,16 @@ talks to (buses, devices, evdev inputs).
     "tls": false,
     "username": null,
     "password": null,
-    "clientId": "visca-mqtt-bridge",
+    "clientId": "hambridge",
     "keepaliveSec": 30,
     "lwt": {
-      "topic": "bridge/visca-mqtt-bridge/status",
+      "topic": "bridge/hambridge/status",
       "payload": "offline",
       "retain": true,
       "qos": 1
     },
     "birth": {
-      "topic": "bridge/visca-mqtt-bridge/status",
+      "topic": "bridge/hambridge/status",
       "payload": "online",
       "retain": true,
       "qos": 1
@@ -241,7 +241,7 @@ Example shape (illustrative):
   (use with care if the same keyboard is shared with the console).
 * **`mqttTopic`**: topic for that input's event stream. If omitted, the default is
   `evdev/<inputId>/event`.
-* **Implementation**: v0.1 uses the **`libevdev`** C library (linked as `-levdev`) via a small
+* **Implementation**: v0.1 uses the **`libevdev`** C library (linked as `-l:libevdev.so.2`) via a small
   Pascal binding unit. Raw `ioctl`/`read` is reserved for a possible later alternative; either
   way the MQTT contract above does not change.
 
@@ -745,11 +745,11 @@ used to author code, but project files (`.lpi`, `.lpr`, `.lps`) are **not** comm
 /packaging/systemd/tmpfiles.d/hambridge.conf
 /packaging/udev/70-hambridge-input.rules
 /src/
-  visca-mqtt-bridge.lpr        # program entry point
+  hambridge.lpr                # program entry point
   config.pas                   # bridge.json loader + env override
   devicesconfig.pas            # devices.json loader (evdev block in v0.1)
   logger.pas                   # stdout text logger (info/warn/error/debug)
-  libevdev_binding.pas         # cdecl externs for libevdev (-levdev)
+  libevdev_binding.pas         # cdecl externs for libevdev (linked via -l:libevdev.so.2)
   evdevreader.pas              # opens /dev/input/event*, polls, emits records
   mqttpublisher.pas            # wraps prof7bit/fpc-mqtt-client; LWT + birth
   mainloop.pas                 # poll() over evdev fds + MQTT client tick
@@ -757,14 +757,15 @@ used to author code, but project files (`.lpi`, `.lpr`, `.lps`) are **not** comm
 
 Unit responsibilities for v0.1:
 
-* **`visca-mqtt-bridge.lpr`** — argument parsing (`--config`, `--devices`, `--help`,
+* **`hambridge.lpr`** — argument parsing (`--config`, `--devices`, `--help`,
   `--version`), top-level wiring, signal handling (`SIGTERM` graceful shutdown).
 * **`config.pas`** — load `bridge.json`, apply `BRIDGE_*` env overrides, validate. Path
   discovery as in §3.0.
 * **`devicesconfig.pas`** — load `devices.json`. v0.1 only consumes the `evdev` block; bus and
   device blocks are parsed but otherwise unused.
 * **`logger.pas`** — global logger, level-filtered, plain text to stdout. No external deps.
-* **`libevdev_binding.pas`** — minimal `cdecl; external 'evdev'` declarations for:
+* **`libevdev_binding.pas`** — minimal `cdecl; external name '<symbol>'` declarations (one
+  quoted linker symbol per function, e.g. `libevdev_new`) for:
   `libevdev_new`, `libevdev_free`, `libevdev_set_fd`, `libevdev_grab`,
   `libevdev_next_event`, `libevdev_event_type_get_name`, `libevdev_event_code_get_name`, plus
   the `input_event` record. Opaque `Plibevdev` pointer.
@@ -778,11 +779,12 @@ Unit responsibilities for v0.1:
 
 ### Makefile targets
 
-* **`make`** (default) — builds `visca-mqtt-bridge` into `./build/` using `fpc`, linking
-  `-levdev`. Recommended flags: `-MObjFPC -Scghi -O2 -Xs -gl` (Object Pascal mode, line info
-  for stack traces, optimisation, strip after link).
+* **`make`** (default) — builds `hambridge` into `./build/` using `fpc`, linking
+  `libevdev.so.2` via `-l:libevdev.so.2` and a discovered `-L` path (Fedora `/usr/lib64`,
+  Debian multiarch `/usr/lib/x86_64-linux-gnu`). Recommended flags: `-MObjFPC -Scghi -O2 -Xs -gl`
+  (Object Pascal mode, line info for stack traces, optimisation, strip after link).
 * **`make clean`** — removes `./build/` and stray `.o` / `.ppu` files.
-* **`make run`** — convenience target: `./build/visca-mqtt-bridge --config ./bridge.json
+* **`make run`** — convenience target: `./build/hambridge --config ./bridge.json
   --devices ./devices.json`.
 * **`make install`** *(optional, post-v0.1)* — install binary to `/usr/local/bin` and example
   configs to `/etc/hambridge/`.
@@ -792,13 +794,13 @@ Unit responsibilities for v0.1:
 * **`bridge.json.example`** — annotated copy of the §3.0 example, with `mqtt.host` =
   `localhost`, no auth, no TLS, `log.level` = `info`.
 * **`devices.json.example`** — minimal config: empty `buses` and `devices` arrays plus an
-  `evdev` block with one disabled-by-default input pointing at `/dev/input/event0` and
-  `mqttTopic` = `evdev/example/event`.
+  `evdev` block with `enabled` true, one input pointing at `/dev/input/event0` (edit to a node
+  you can read), and `mqttTopic` = `evdev/example/event`.
 
 ### Runtime prerequisites
 
 * Linux kernel with input subsystem (any modern distro).
-* `libevdev.so` available at runtime (e.g. `libevdev2` on Debian/Ubuntu).
+* `libevdev.so.2` available at runtime (e.g. `libevdev2` on Debian/Ubuntu).
 * The bridge process must have read access to the configured `/dev/input/event*` nodes.
   **systemd deployments** should use an unprivileged service user (`hambridge`) plus **narrow
   udev rules** from `packaging/udev/` (preferred over adding that user to the broad `input` group).
@@ -815,10 +817,11 @@ Dependencies are listed alongside the phase that introduces them. v0.1 has the s
 * **MQTT client**: **`prof7bit/fpc-mqtt-client`** (preferred) — pure Pascal MQTT v5 client.
 * **JSON**: `fpjson` + `jsonparser` (FCL, ships with FPC) — used to load `bridge.json` /
   `devices.json` and to encode evdev event payloads.
-* **libevdev** (Linux only): the C library `libevdev`, linked as `-levdev`. Distro packages:
-  Debian/Ubuntu `libevdev-dev`, Fedora `libevdev-devel`, Arch `libevdev`. v0.1 calls this library
-  via a small in-tree Pascal binding (`src/libevdev_binding.pas`); there is no separate Pascal
-  package dependency.
+* **libevdev** (Linux only): the C library `libevdev`, linked at build time as `-l:libevdev.so.2`
+  (runtime SONAME; no unversioned `.so` symlink required). Distro packages: Debian/Ubuntu
+  `libevdev2`, Fedora `libevdev`, Arch `libevdev`. v0.1 calls this library via a small in-tree
+  Pascal binding (`src/libevdev_binding.pas`); there is no separate Pascal package dependency.
+  Optional `-dev` / `-devel` packages are only needed when editing the binding against C headers.
 * **Free Pascal Compiler**: 3.2.x or newer.
 
 ## v0.2 (added)

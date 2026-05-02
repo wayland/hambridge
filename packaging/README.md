@@ -1,7 +1,7 @@
 # HaMBridge — `packaging/`
 
-**HaMBridge** (Hardware-MQTT Bridge) is the product name for this daemon. The repository and
-binary may still use historical names (e.g. `visca-mqtt-bridge`); paths here follow the HaMBridge
+**HaMBridge** (Hardware-MQTT Bridge) is the product name for this daemon. Install the `hambridge`
+binary to `/usr/local/bin` (or another path on `PATH`); config paths here follow the HaMBridge
 layout under `/etc/hambridge/`.
 
 This directory holds **systemd**, **sysusers**, **tmpfiles**, and **udev** templates for
@@ -19,7 +19,7 @@ Contents:
 Install order (summary):
 
 1. Build or install the binary (see [DEVELOPING.md](../DEVELOPING.md)); symlink or copy to
-   `/usr/local/bin/visca-mqtt-bridge` or adjust `ExecStart=` in the unit file.
+   `/usr/local/bin/hambridge` or adjust `ExecStart=` in the unit file.
 2. `sudo cp systemd/sysusers.d/hambridge.conf /usr/lib/sysusers.d/` then
    `sudo systemd-sysusers` (or reboot) to create `hambridge:hambridge`.
 3. `sudo cp systemd/tmpfiles.d/hambridge.conf /usr/lib/tmpfiles.d/` then
