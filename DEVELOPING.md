@@ -40,6 +40,17 @@ make clean      # removes ./build/
 make run        # runs against ./bridge.json + ./devices.json
 ```
 
+**Fedora RPM (optional)** — on a Fedora/RHEL-family host with `rpm-build`, `git`, and the same
+build deps as `make`:
+
+```bash
+make fedora-rpm    # git archive + rpmbuild into build/rpmbuild/{SOURCES,SRPMS,RPMS}
+make fedora-test   # builds the RPM then smoke-tests (requires, paths, hambridge --version via rpm2cpio)
+```
+
+`make clean` removes `build/` including that rpmbuild tree. Bump `RPM_VER` in the `Makefile` when
+you bump `AppVersion` in `src/hambridge.lpr` and `Version` in `packaging/Redhat/hambridge.spec`.
+
 The Makefile invokes `fpc` with `-k-L<libdir> -k-l:libevdev.so.2` when it finds that shared
 library under `/usr/lib64` or `/usr/lib/x86_64-linux-gnu`. Recommended compiler flags are
 documented in the plan (§5.1).

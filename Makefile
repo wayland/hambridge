@@ -24,7 +24,12 @@ EVDEV_LDIR := $(dir $(EVDEV_SO))
 FPCFLAGS += -k-L$(EVDEV_LDIR) -k-l:libevdev.so.2
 FPCFLAGS += -Fl/usr/lib64 -Fl/usr/lib/x86_64-linux-gnu
 
-.PHONY: all clean run
+# Keep in sync with src/hambridge.lpr AppVersion and packaging/Redhat/hambridge.spec Version.
+RPM_VER := 0.1.0
+RPM_TOPDIR := $(abspath build/rpmbuild)
+RPM_SPEC := packaging/Redhat/hambridge.spec
+
+.PHONY: all clean run fedora-rpm-sources fedora-rpm fedora-test
 
 all: $(BINARY)
 
@@ -52,3 +57,39 @@ clean:
 
 run: $(BINARY)
 	$(BINARY) --config ./bridge.json --devices ./devices.json
+
+# --- Fedora RPM (needs: git, rpm-build, fpc, gcc, make, unzip, systemd-rpm-macros) ---
+# Uses a private rpmbuild tree under build/rpmbuild/ (removed by make clean).
+# Source1 zip is copied from build/deps/ when present to avoid an extra download.
+
+fedora-rpm-sources:
+	@command -v git >/dev/null 2>&1 || { echo 'fedora-rpm: git is required' >&2; exit 1; }
+	@command -v rpmbuild >/dev/null 2>&1 || { echo 'fedora-rpm: install rpm-build (dnf install rpm-build)' >&2; exit 1; }
+	@test -d .git || { echo 'fedora-rpm: need a git checkout (git archive uses HEAD)' >&2; exit 1; }
+	mkdir -p '$(RPM_TOPDIR)'/{BUILD,BUILDROOT,RPMS/noarch,RPMS/x86_64,RPMS/aarch64,SRPMS,SOURCES,SPECS}
+	git archive --format=tar.gz --prefix=hambridge-$(RPM_VER)/ \
+	  -o '$(RPM_TOPDIR)/SOURCES/hambridge-$(RPM_VER).tar.gz' HEAD
+	@set -e; z='$(RPM_TOPDIR)/SOURCES/fpc-mqtt-client-$(FPC_MQTT_TAG).zip'; \
+	if [ -f '$(MQTTZIP)' ]; then cp -f '$(MQTTZIP)' "$$z"; \
+	else curl -fsSL -o "$$z.part" '$(FPC_MQTT_URL)' && mv -f "$$z.part" "$$z"; fi; \
+	echo '$(FPC_MQTT_SHA256)  '"$$z" | sha256sum -c -
+	install -Dpm0644 '$(RPM_SPEC)' '$(RPM_TOPDIR)/SPECS/hambridge.spec'
+
+fedora-rpm: fedora-rpm-sources
+	rpmbuild -ba --define "_topdir $(RPM_TOPDIR)" '$(RPM_TOPDIR)/SPECS/hambridge.spec'
+
+# Smoke-test the binary RPM: metadata, file list, extract hambridge --version (no system install).
+fedora-test: fedora-rpm
+	@command -v rpm2cpio >/dev/null 2>&1 || { echo 'fedora-test: install rpm-build (rpm2cpio)' >&2; exit 1; }
+	@set -e; \
+	rpmfile=$$(find '$(RPM_TOPDIR)/RPMS' -maxdepth 2 -type f -name 'hambridge-$(RPM_VER)-*.rpm' ! -name '*debuginfo*' | head -n1); \
+	test -n "$$rpmfile" || { echo 'fedora-test: no hambridge RPM under $(RPM_TOPDIR)/RPMS' >&2; exit 1; }; \
+	echo "==> RPM: $$rpmfile"; \
+	rpm -qp "$$rpmfile" --requires | grep -E 'libevdev|openssl|systemd' >/dev/null; \
+	rpm -qpl "$$rpmfile" | grep -E '^/usr/bin/hambridge$$|^/usr/lib/systemd/system/hambridge.service$$' >/dev/null; \
+	echo '==> Extract and run hambridge --version'; \
+	tmpdir=$$(mktemp -d); \
+	trap 'rm -rf "$$tmpdir"' EXIT; \
+	(cd "$$tmpdir" && rpm2cpio "$$rpmfile" | cpio -idm 2>/dev/null); \
+	"$$tmpdir/usr/bin/hambridge" --version; \
+	if command -v rpmlint >/dev/null 2>&1; then echo '==> rpmlint (optional)'; rpmlint "$$rpmfile" || true; fi
