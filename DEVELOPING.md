@@ -2,7 +2,8 @@
 
 This document is for **building from source** and contributor-oriented setup. For what the
 project does and how to run a binary you already have, see [README.md](README.md). The full
-design is in [Visca-MQTT-bridge-Plan.md](Visca-MQTT-bridge-Plan.md).
+design is in [Visca-MQTT-bridge-Plan.md](Visca-MQTT-bridge-Plan.md). **Release notes:** [CHANGELOG.md](CHANGELOG.md).
+**Backlog / upcoming minors:** [ROADMAP.md](ROADMAP.md).
 
 The product name is **HaMBridge**; the v0.1 build produces the `hambridge` binary.
 

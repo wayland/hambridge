@@ -1,8 +1,9 @@
 # HaMBridge (Hardware-MQTT Bridge)
 
 A headless Linux daemon that bridges **hardware** (Linux evdev input today; VISCA/serial in
-later releases) **to MQTT**. This repository also tracks the **MQTT ↔ VISCA** roadmap; the
-architecture is described in [Visca-MQTT-bridge-Plan.md](Visca-MQTT-bridge-Plan.md).
+later releases) **to MQTT**. Architecture and phased behaviour are in
+[Visca-MQTT-bridge-Plan.md](Visca-MQTT-bridge-Plan.md); **release notes** in [CHANGELOG.md](CHANGELOG.md)
+and **upcoming work** in [ROADMAP.md](ROADMAP.md).
 
 The v0.1 binary is **`hambridge`**; systemd and packaging use the **HaMBridge** product name and
 `/etc/hambridge/` for configuration.
@@ -12,14 +13,14 @@ pinned [fpc-mqtt-client](https://github.com/prof7bit/fpc-mqtt-client) release (n
 `unzip`, and network access). Packaging helpers (systemd, udev, sysusers) live under
 [packaging/](packaging/).
 
-## Roadmap
+## Roadmap (summary)
 
-- **v0.1** — evdev → MQTT (current focus). Read configured `/dev/input/event*` devices via
-  `libevdev` and publish each kernel input event as JSON to MQTT.
-- **v0.2** — MQTT → VISCA. Subscribe to `device/<slug>/<command>` topics and drive a VISCA camera
-  over RS-485/serial.
-- **v0.3** — VISCA → MQTT. Decode RS-485 controllers and device responses; publish semantic
-  events and device telemetry.
+- **v0.1** — evdev → MQTT: configured `/dev/input/event*` via `libevdev`, JSON to MQTT.
+- **v0.2** — MQTT → VISCA: `device/<slug>/<command>`, serial TX, `visca-mapping.json`.
+- **v0.2.1** — Framed mapping + MQTT JSON template slots.
+- **v0.3** — VISCA → MQTT: serial RX, `controller/<bus>/event`, device telemetry/status.
+
+Later **v0.3.1**–**v0.3.3** items are listed in [ROADMAP.md](ROADMAP.md).
 
 ## Requirements (runtime)
 

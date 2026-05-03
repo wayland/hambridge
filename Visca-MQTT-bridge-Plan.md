@@ -58,7 +58,13 @@ releases extend the same daemon rather than replacing it.
   device replies → telemetry; per-device `lastController` / `lastReply` on `device/<slug>/status`.)*
   * Adds inbound VISCA decoding (RS-485 sniffing of controllers, device responses).
   * Publishes `controller/<bus>/event` semantic JSON (§3.1.1).
-  * Adds the State Manager (§3.5) and `device/<slug>/status` / `device/<slug>/telemetry` topics.
+  * Adds `device/<slug>/status` / `device/<slug>/telemetry` for last-known snippets; a fuller **state cache** (plan §3.5) is **not** implemented yet — see **ROADMAP.md** (**v0.3.2**).
+
+* **v0.3.1** — *Real-bus discipline and transport hardening* — ACK / completion discipline, **retry**, **buffered serial writes**, **multi-byte** mapping template slots, serial recovery, MQTT acks, RS-485 half-duplex. **Nibble** slot encodings remain later. Tracked in **ROADMAP.md**.
+
+* **v0.3.2** — *Coalescing and device state cache* — continuous controls (**`scheduler.coalesce`**) and full **state manager** behaviour (plan §3.5). Tracked in **ROADMAP.md**.
+
+* **v0.3.3** — *Semantic decode of camera replies* — inquiries, errors, and state beyond ACK / raw **hex** on telemetry. Tracked in **ROADMAP.md**.
 
 Sections in this document marked **Phase: v0.2** or **Phase: v0.3** describe deferred work and
 are kept here for design continuity; v0.1 implementers can ignore them.
@@ -520,7 +526,7 @@ type
 
 ## 3.3 VISCA Protocol Layer
 
-*Phase: v0.2 (encoder + per-model `visca-mapping.json`); response decode extended in v0.3.*
+*Phase: v0.2 (JSON **`visca-mapping.json`** encoder with per-model entries); response decode extended in v0.3.*
 
 ### Responsibilities
 
@@ -545,26 +551,29 @@ Not all cameras implement the same VISCA feature set. Some devices support addit
 (or require different encodings) for functions like on-screen display (OSD) menu control, image
 settings, or extended presets.
 
-Plan for a device capability layer that can be selected per `device/<slug>`:
+**Normative path:** MQTT → VISCA encoding is **only** through **`visca-mapping.json`** (and the
+same on-disk schema whether the file is single or split and merged at load time—an implementation
+detail). The bridge selects the mapping **`model`** string from each `device/<slug>` in
+`devices.json`. There is **no** specified or required parallel layer of per-model Pascal “encoder
+profile” classes; model quirks and extensions are expressed by **adding or overriding topics and
+frames under that model** in JSON.
 
-* **Base VISCA profile**: common commands (power, zoom, preset recall/set, etc.)
-* **Device profile**: model-specific support/overrides (e.g., Marshall CV344 OSD menu controls)
+Conceptually, the file holds **per-model** tables:
 
-This can be expressed as a mapping table or a per-model encoder class (e.g. `TViscaProfileBase`,
-`TViscaProfileMarshallCV344`) that the command router uses when converting MQTT messages into
-VISCA packets.
+* A **base** model (e.g. shared `generic` / common topics): power, zoom, preset recall/set, etc.
+* **Derived** models (e.g. `marshall-cv344`): extra topics or different byte templates for OSD,
+  image settings, extended presets, and so on.
 
- u#### JSON mapping table (recommended)
+#### `visca-mapping.json`
 
-For device-specific commands that can be represented as static VISCA frames, use a JSON mapping
-file (e.g. `visca-mapping.json`) loaded at startup. This allows adding/overriding commands per
-model without recompiling.
+The mapping file is loaded at startup so commands can be added or adjusted **without recompiling**
+the bridge.
 
-The mapping table should support:
+The mapping file must support:
 
 * **Per-model selection**: e.g. `"model": "marshall-cv344"` assigned per `device/<slug>`
 * **Topic → VISCA frame(s)**: static byte sequences (hex) and/or **framed** rules (fixed middle + template slots)
-* **Optional parameters**: MQTT JSON and `variables` defaults supply **one byte per template slot** (v0.2.1); richer encodings (multi-byte, nibbles) are a later extension.
+* **Optional parameters**: MQTT JSON and `variables` defaults supply **one byte per template slot** (v0.2.1). **Multi-byte** slots per template entry are planned for **v0.3.1** (see **ROADMAP.md**). **Nibble** and other exotic slot encodings remain a later extension.
 
 #### Wire assembly (v0.2.1)
 
@@ -755,8 +764,8 @@ units listed in §5.1.
 
 ## 5.1 Build & layout (v0.1)
 
-v0.1 builds with **`fpc` + `make`**; no Lazarus IDE is required. The Lazarus IDE may still be
-used to author code, but project files (`.lpi`, `.lpr`, `.lps`) are **not** committed.
+v0.1 builds with **`fpc` + `make`**. Optional IDE project metadata (e.g. `.lpi`, `.lps`) is **not**
+committed; **`hambridge.lpr`** in `src/` is the program entry source.
 
 ### Repository layout
 
@@ -766,7 +775,9 @@ used to author code, but project files (`.lpi`, `.lpr`, `.lps`) are **not** comm
 /DEVELOPING.md
 /.gitignore
 /LICENSE                       # GPL-3.0-or-later
-/Visca-MQTT-bridge-Plan.md     # this file
+/Visca-MQTT-bridge-Plan.md     # this file (architecture + phased spec)
+/CHANGELOG.md                  # release notes (human-oriented)
+/ROADMAP.md                    # backlog and upcoming minor releases (v0.3.1, v0.3.2, …)
 /bridge.json.example
 /devices.json.example
 /packaging/README.md             # systemd, sysusers, tmpfiles, udev templates
@@ -885,8 +896,8 @@ Dependencies are listed alongside the phase that introduces them. v0.1 has the s
 
 ## Notes
 
-* The bridge is **headless**; LCL / Lazarus runtime components are not required.
-* Building does not require the Lazarus IDE — `fpc` plus a Makefile is the supported flow.
+* The bridge is **headless** (no GUI toolkit in the runtime).
+* Building uses **`fpc`** plus the root **`Makefile`** (see §5.1).
 
 ---
 
@@ -913,14 +924,7 @@ Dependencies are listed alongside the phase that introduces them. v0.1 has the s
 
 ---
 
-# 9. Optional Extensions
-
-* Macro command sequences (multi-step VISCA scripts)
-* Scheduled presets / automation rules
-
----
-
-# 10. Design Philosophy
+# 9. Design Philosophy
 
 > This system is a deterministic protocol translator between messaging and hardware control.
 
@@ -936,9 +940,3 @@ Dependencies are listed alongside the phase that introduces them. v0.1 has the s
 
 > Build a Free Pascal service that subscribes to MQTT device control topics, parses JSON commands, converts them into VISCA packets, sends them over RS-485/serial, and optionally publishes device state updates back to MQTT.
 
----
-
-If you want next, I can turn this into:
-
-* a **full Free Pascal project skeleton (.lpi + unit files)**
-* or a **strict MQTT ↔ VISCA mapping spec (exact payload examples + packet formats)** which is usually the next thing Cursor needs to generate correct code.

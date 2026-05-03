@@ -23,7 +23,7 @@ hambridge
 *.rsj
 *.compiled
 
-# Lazarus IDE files (headless build is supported; IDE metadata is local-only).
+# Optional IDE / editor project metadata (not required for `fpc` + `make` builds).
 # Note: .lpr files ARE committed -- they are the Pascal program source.
 *.lpi
 *.lps
