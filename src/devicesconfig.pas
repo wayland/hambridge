@@ -47,6 +47,7 @@ type
     AckTimeoutMs: Cardinal;     { 0 = do not wait for VISCA reply before next command }
     CommandRetryMax: Cardinal; { extra attempts after first TX (0 = no retries) }
     RetryBackoffMs: Cardinal; { delay before each retry }
+    CoalescePaths: array of string; { scheduler.coalesce: first path segment, e.g. pan / tilt / zoom }
   end;
 
   TSerialBusDyn = array of TSerialBusConfig;
@@ -212,8 +213,8 @@ end;
 
 procedure LoadViscaDevices(Root: TJSONObject; var Devs: TViscaDeviceDyn);
 var
-  Arr: TJSONArray;
-  I: Integer;
+  Arr, CoalArr: TJSONArray;
+  I, J: Integer;
   Item: TJSONObject;
   Sch: TJSONObject;
   addr: Integer;
@@ -241,6 +242,7 @@ begin
     Devs[I].CommandRetryMax := 2;
     Devs[I].RetryBackoffMs := 50;
     Sch := ObjGetObjectCI(Item, 'scheduler');
+    SetLength(Devs[I].CoalescePaths, 0);
     if Sch <> nil then
     begin
       Devs[I].MinInterCommandMs := Cardinal(Max(1, JsonGetInt(Sch, 'minInterCommandMs', 40)));
@@ -248,6 +250,17 @@ begin
       Devs[I].AckTimeoutMs := Cardinal(Max(0, JsonGetInt(Sch, 'ackTimeoutMs', 800)));
       Devs[I].CommandRetryMax := Cardinal(Max(0, JsonGetInt(Sch, 'commandRetryMax', 2)));
       Devs[I].RetryBackoffMs := Cardinal(Max(0, JsonGetInt(Sch, 'retryBackoffMs', 50)));
+      if ObjFindCI(Sch, 'coalesce') is TJSONArray then
+      begin
+        CoalArr := TJSONArray(ObjFindCI(Sch, 'coalesce'));
+        SetLength(Devs[I].CoalescePaths, CoalArr.Count);
+        for J := 0 to CoalArr.Count - 1 do
+        begin
+          Devs[I].CoalescePaths[J] := '';
+          if CoalArr.Items[J] is TJSONString then
+            Devs[I].CoalescePaths[J] := Trim(TJSONString(CoalArr.Items[J]).AsString);
+        end;
+      end;
     end;
     if Devs[I].Model = '' then
       raise Exception.Create('devices.json: VISCA device slug "' + Devs[I].Slug + '" needs model');

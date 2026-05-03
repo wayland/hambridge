@@ -2,6 +2,14 @@
 
 Notable changes to **HaMBridge** (this repository). Release history for packaging metadata remains in `packaging/debian/changelog` (Debian) and the RPM spec where required by those formats.
 
+## [0.3.2] — 2026-05-02
+
+### Added
+
+- **`devices.json`** — `devices[].scheduler.coalesce`: array of first path segments (`pan`, `tilt`, `zoom`, …). Before enqueueing, older **queued** commands for the same device and segment are removed (the item waiting for ACK is not dropped).
+- **Redundant VISCA skip** — Per-device, per-command-path **last successful wire** cache (bridge ACK/completion and controller semantic re-encode). Matching MQTT control is answered with **`commandAck`** (`reason: redundant`, `viscaKind: skipped`) without enqueueing or sending; duplicates already queued are dropped at send time the same way.
+- **`device/<slug>/status`** — Optional **`state`** object with last JSON for **`pan`**, **`tilt`**, **`zoom`**, and **preset**-family commands, updated from bridge successes and controller decodes.
+
 ## [0.3.1] — 2026-05-02
 
 ### Added

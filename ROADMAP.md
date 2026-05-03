@@ -30,9 +30,9 @@ This file lists **planned or deferred work** compared to [`Visca-MQTT-bridge-Pla
 
 ### v0.3.2 checklist
 
-- [ ] **Coalescing for continuous controls** (`pan` / `tilt` / `zoom`) — Drop superseded high-rate commands; parse and honour `devices.json` **`scheduler.coalesce`**.
-- [ ] **Device state cache** (plan §3.5) — Pan, tilt, zoom, preset (and related) as first-class cached fields where inquiries or events supply them.
-- [ ] **Use cache to skip redundant VISCA** — Avoid re-sending when state already matches intent.
+- [x] **Coalescing for continuous controls** — When **`scheduler.coalesce`** lists a command’s first path segment (e.g. `pan`), older **queued** (not in-flight) commands for the same device and segment are dropped before enqueueing the newest.
+- [x] **Device state cache** (plan §3.5) — Last MQTT JSON for **`pan`**, **`tilt`**, **`zoom`**, and **preset**-family paths (`preset/…`) is merged into **`device/<slug>/status`** as a **`state`** object. Updates come from **bridge-originated** successes and **controller** semantic decodes (re-encoded wire); device **inquiry** semantics remain **v0.3.3**.
+- [x] **Use cache to skip redundant VISCA** — If the encoded packet matches the per-path **last wire** cache, the bridge skips TX (MQTT **`commandAck`** with `reason: redundant` / `viscaKind: skipped`) at receive time and again at send time if a duplicate reached the queue.
 
 ---
 
@@ -50,7 +50,7 @@ This file lists **planned or deferred work** compared to [`Visca-MQTT-bridge-Pla
 
 - [ ] **Rate limiting / backpressure** — Beyond fixed **max queue depth** and **inter-command gap**; no explicit RS-485 saturation policy as described in the plan.
 
-ACK / completion timing and **`scheduler.ackTimeoutMs`** are tracked under **v0.3.1** above. **Coalescing** and **`scheduler.coalesce`** are under **v0.3.2** above.
+ACK / completion timing and **`scheduler.ackTimeoutMs`** are tracked under **v0.3.1** above. **Coalescing** and **`scheduler.coalesce`** are implemented under **v0.3.2** above.
 
 ## VISCA protocol layer (plan §3.3)
 

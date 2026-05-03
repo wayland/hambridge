@@ -7,6 +7,7 @@ unit commandrouter;
         device replies → device/<slug>/telemetry and status snapshot on controller/reply.
   v0.3.1: ACK wait + retry (scheduler), TX queue + pump, serial reopen, MQTT device/<slug>/commandAck,
         optional per-bus rs485 ioctl from devices.json.
+  v0.3.2: scheduler.coalesce queue drops, last-wire skip for redundant VISCA, state snapshot on status.
 }
 
 {$mode ObjFPC}{$H+}
@@ -22,6 +23,19 @@ const
 
 type
   TBusTxPhase = (btpIdle, btpDrainingTx, btpWaitReply, btpBackoffRetry);
+
+  TPathLastWire = record
+    CmdPath: string;
+    Wire: TBytes;
+    Valid: Boolean;
+  end;
+
+  TDeviceStateSnap = record
+    PanJson: string;
+    TiltJson: string;
+    ZoomJson: string;
+    PresetJson: string;
+  end;
 
   TQueuedViscaCommand = class
     DeviceConfigIndex: Integer;
@@ -50,6 +64,8 @@ type
     FInFlightSendCount: array of Integer;
     FInFlightPacket: array of TBytes;
     FRetryResumeTick: array of QWord;
+    FPathWireCache: array of array of TPathLastWire;
+    FStateSnap: array of TDeviceStateSnap;
     function IndexOfSerialBusByConfigId(const BusId: string): Integer;
     function IndexOfViscaDeviceByTopicSlug(const TopicSlug: string): Integer;
     function IndexOfViscaDeviceOnBusByReplyByte(SerialBusIndex: Integer; ReplyFirst: Byte): Integer;
@@ -70,6 +86,16 @@ type
     procedure OnAckTimeout(SerialBusIndex: Integer; NowTick: QWord);
     procedure MaybeStartHeadCommand(SerialBusIndex: Integer; NowTick: QWord);
     procedure AdvanceBusTransmission(SerialBusIndex: Integer; NowTick: QWord);
+    function FirstPathSegment(const Path: string): string;
+    function CoalesceGroupKey(DeviceIndex: Integer; const Path: string): string;
+    procedure RemoveQueuedCoalesced(SerialBusIndex, DeviceIndex: Integer; const GroupKey: string);
+    function ViscaBytesEqual(const A, B: TBytes): Boolean;
+    function PathWireCacheIndex(DevIdx: Integer; const CmdPath: string): Integer;
+    procedure PathWireCacheUpsert(DevIdx: Integer; const CmdPath: string; const Wire: TBytes);
+    function PathWireCacheMatches(DevIdx: Integer; const CmdPath: string; const Wire: TBytes): Boolean;
+    procedure RememberBridgeWireAndState(DevIdx: Integer; const CmdPath, PayloadJson: string; const Wire: TBytes);
+    procedure StateSnapFromPathPayload(DevIdx: Integer; const CmdPath, PayloadJson: string);
+    function BuildStateJsonFragment(DevIdx: Integer): string;
     function JsonQuote(const s: string): string;
   public
     constructor Create(const DeviceConfiguration: TDevicesConfig; ViscaCommandMapping: TViscaMapping;
@@ -83,6 +109,194 @@ implementation
 
 uses
   Math, StrUtils, DateUtils;
+
+const
+  MaxPathWireCachePerDevice = 48;
+
+function TCommandRouter.FirstPathSegment(const Path: string): string;
+var
+  P: Integer;
+begin
+  P := Pos('/', Path);
+  if P <= 0 then
+    Result := Path
+  else
+    Result := Copy(Path, 1, P - 1);
+end;
+
+function TCommandRouter.CoalesceGroupKey(DeviceIndex: Integer; const Path: string): string;
+var
+  fs: string;
+  k: Integer;
+  Row: TViscaDeviceConfig;
+begin
+  Result := '';
+  if (DeviceIndex < 0) or (DeviceIndex > High(FDeviceConfiguration.ViscaDevices)) then
+    Exit;
+  Row := FDeviceConfiguration.ViscaDevices[DeviceIndex];
+  fs := FirstPathSegment(Path);
+  if fs = '' then
+    Exit;
+  for k := 0 to High(Row.CoalescePaths) do
+  begin
+    if SameText(fs, Trim(Row.CoalescePaths[k])) then
+      Exit(fs);
+  end;
+end;
+
+procedure TCommandRouter.RemoveQueuedCoalesced(SerialBusIndex, DeviceIndex: Integer; const GroupKey: string);
+var
+  Q: TFPList;
+  I: Integer;
+  Qc: TQueuedViscaCommand;
+begin
+  if GroupKey = '' then
+    Exit;
+  Q := FCommandQueuesPerBus[SerialBusIndex];
+  for I := Q.Count - 1 downto 0 do
+  begin
+    Qc := TQueuedViscaCommand(Q[I]);
+    if Qc.DeviceConfigIndex <> DeviceIndex then
+      Continue;
+    if not SameText(CoalesceGroupKey(Qc.DeviceConfigIndex, Qc.ViscaCommandPath), GroupKey) then
+      Continue;
+    if (I = 0) and (FBusTxPhase[SerialBusIndex] <> btpIdle) then
+      Continue;
+    Q.Delete(I);
+    Qc.Free;
+  end;
+end;
+
+function TCommandRouter.ViscaBytesEqual(const A, B: TBytes): Boolean;
+var
+  n, I: Integer;
+begin
+  n := Length(A);
+  if Length(B) <> n then
+    Exit(False);
+  for I := 0 to n - 1 do
+    if A[I] <> B[I] then
+      Exit(False);
+  Result := True;
+end;
+
+function TCommandRouter.PathWireCacheIndex(DevIdx: Integer; const CmdPath: string): Integer;
+var
+  I: Integer;
+begin
+  Result := -1;
+  if (DevIdx < 0) or (DevIdx > High(FPathWireCache)) then
+    Exit;
+  for I := 0 to High(FPathWireCache[DevIdx]) do
+    if SameText(FPathWireCache[DevIdx][I].CmdPath, CmdPath) then
+      Exit(I);
+end;
+
+procedure TCommandRouter.PathWireCacheUpsert(DevIdx: Integer; const CmdPath: string; const Wire: TBytes);
+var
+  I, J: Integer;
+begin
+  if (DevIdx < 0) or (DevIdx > High(FPathWireCache)) or (CmdPath = '') then
+    Exit;
+  I := PathWireCacheIndex(DevIdx, CmdPath);
+  if I >= 0 then
+  begin
+    FPathWireCache[DevIdx][I].Wire := Copy(Wire, 0, Length(Wire));
+    FPathWireCache[DevIdx][I].Valid := Length(Wire) > 0;
+    Exit;
+  end;
+  while Length(FPathWireCache[DevIdx]) >= MaxPathWireCachePerDevice do
+  begin
+    for J := 0 to High(FPathWireCache[DevIdx]) - 1 do
+      FPathWireCache[DevIdx][J] := FPathWireCache[DevIdx][J + 1];
+    SetLength(FPathWireCache[DevIdx], High(FPathWireCache[DevIdx]));
+  end;
+  SetLength(FPathWireCache[DevIdx], Length(FPathWireCache[DevIdx]) + 1);
+  I := High(FPathWireCache[DevIdx]);
+  FPathWireCache[DevIdx][I].CmdPath := CmdPath;
+  FPathWireCache[DevIdx][I].Wire := Copy(Wire, 0, Length(Wire));
+  FPathWireCache[DevIdx][I].Valid := Length(Wire) > 0;
+end;
+
+function TCommandRouter.PathWireCacheMatches(DevIdx: Integer; const CmdPath: string; const Wire: TBytes): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  I := PathWireCacheIndex(DevIdx, CmdPath);
+  if I < 0 then
+    Exit;
+  if not FPathWireCache[DevIdx][I].Valid then
+    Exit;
+  Result := ViscaBytesEqual(FPathWireCache[DevIdx][I].Wire, Wire);
+end;
+
+procedure TCommandRouter.StateSnapFromPathPayload(DevIdx: Integer; const CmdPath, PayloadJson: string);
+var
+  seg: string;
+begin
+  if (DevIdx < 0) or (DevIdx > High(FStateSnap)) then
+    Exit;
+  seg := FirstPathSegment(CmdPath);
+  if SameText(seg, 'pan') then
+    FStateSnap[DevIdx].PanJson := PayloadJson
+  else if SameText(seg, 'tilt') then
+    FStateSnap[DevIdx].TiltJson := PayloadJson
+  else if SameText(seg, 'zoom') then
+    FStateSnap[DevIdx].ZoomJson := PayloadJson
+  else if SameText(seg, 'preset') or StartsText(CmdPath, 'preset/') then
+    FStateSnap[DevIdx].PresetJson := PayloadJson;
+end;
+
+procedure TCommandRouter.RememberBridgeWireAndState(DevIdx: Integer; const CmdPath, PayloadJson: string;
+  const Wire: TBytes);
+begin
+  PathWireCacheUpsert(DevIdx, CmdPath, Wire);
+  StateSnapFromPathPayload(DevIdx, CmdPath, PayloadJson);
+end;
+
+function TCommandRouter.BuildStateJsonFragment(DevIdx: Integer): string;
+var
+  S: string;
+  first: Boolean;
+begin
+  Result := '';
+  if (DevIdx < 0) or (DevIdx > High(FStateSnap)) then
+    Exit;
+  first := True;
+  S := '';
+  if Trim(FStateSnap[DevIdx].PanJson) <> '' then
+  begin
+    if not first then
+      S := S + ',';
+    S := S + '"pan":' + FStateSnap[DevIdx].PanJson;
+    first := False;
+  end;
+  if Trim(FStateSnap[DevIdx].TiltJson) <> '' then
+  begin
+    if not first then
+      S := S + ',';
+    S := S + '"tilt":' + FStateSnap[DevIdx].TiltJson;
+    first := False;
+  end;
+  if Trim(FStateSnap[DevIdx].ZoomJson) <> '' then
+  begin
+    if not first then
+      S := S + ',';
+    S := S + '"zoom":' + FStateSnap[DevIdx].ZoomJson;
+    first := False;
+  end;
+  if Trim(FStateSnap[DevIdx].PresetJson) <> '' then
+  begin
+    if not first then
+      S := S + ',';
+    S := S + '"preset":' + FStateSnap[DevIdx].PresetJson;
+    first := False;
+  end;
+  if S = '' then
+    Exit;
+  Result := ',"state":{' + S + '}';
+end;
 
 function TCommandRouter.JsonQuote(const s: string): string;
 begin
@@ -138,6 +352,16 @@ begin
     FLastControllerJson[DeviceLoopIndex] := '';
     FLastReplyJson[DeviceLoopIndex] := '';
   end;
+  SetLength(FPathWireCache, Length(FDeviceConfiguration.ViscaDevices));
+  SetLength(FStateSnap, Length(FDeviceConfiguration.ViscaDevices));
+  for DeviceLoopIndex := 0 to High(FPathWireCache) do
+  begin
+    SetLength(FPathWireCache[DeviceLoopIndex], 0);
+    FStateSnap[DeviceLoopIndex].PanJson := '';
+    FStateSnap[DeviceLoopIndex].TiltJson := '';
+    FStateSnap[DeviceLoopIndex].ZoomJson := '';
+    FStateSnap[DeviceLoopIndex].PresetJson := '';
+  end;
   for DeviceLoopIndex := 0 to High(FDeviceConfiguration.ViscaDevices) do
   begin
     SerialBusIndex := IndexOfSerialBusByConfigId(FDeviceConfiguration.ViscaDevices[DeviceLoopIndex].BusId);
@@ -153,10 +377,12 @@ end;
 
 destructor TCommandRouter.Destroy;
 var
-  BusLoopIndex, QueueSlotIndex: Integer;
+  BusLoopIndex, QueueSlotIndex, DevLoop: Integer;
   QueueList: TFPList;
   QueuedCommand: TQueuedViscaCommand;
 begin
+  for DevLoop := 0 to High(FPathWireCache) do
+    SetLength(FPathWireCache[DevLoop], 0);
   for BusLoopIndex := 0 to High(FCommandQueuesPerBus) do
   begin
     QueueList := FCommandQueuesPerBus[BusLoopIndex];
@@ -284,7 +510,14 @@ begin
     LogFmt(llDebug, 'visca: no mapping or missing template values for topic %s (model %s)', [Topic, DeviceRow.Model]);
     Exit;
   end;
+  if PathWireCacheMatches(DeviceConfigIndex, ViscaCommandPath, EncodedProbe) then
+  begin
+    PublishDeviceCommandAck(DeviceRow.Slug, Topic, ViscaCommandPath, True, 'redundant', 0, 'skipped',
+      TViscaMapping.ViscaPacketToHex(EncodedProbe));
+    Exit;
+  end;
   TrimOldestCommandsIfQueueExceedsDepth(SerialBusIndex, DeviceConfigIndex, DeviceRow.MaxQueueDepth);
+  RemoveQueuedCoalesced(SerialBusIndex, DeviceConfigIndex, CoalesceGroupKey(DeviceConfigIndex, ViscaCommandPath));
   QueuedCommand := TQueuedViscaCommand.Create;
   QueuedCommand.DeviceConfigIndex := DeviceConfigIndex;
   QueuedCommand.SerialBusIndex := SerialBusIndex;
@@ -405,7 +638,7 @@ begin
   Rep := FLastReplyJson[DevIdx];
   if Rep = '' then
     Rep := 'null';
-  Body := Format('{"ts":%d,"lastController":%s,"lastReply":%s}', [Ts, Ctrl, Rep]);
+  Body := Format('{"ts":%d,"lastController":%s,"lastReply":%s%s}', [Ts, Ctrl, Rep, BuildStateJsonFragment(DevIdx)]);
   FMqtt.PublishJson('device/' + DeviceSlug + '/status', Body);
 end;
 
@@ -419,10 +652,10 @@ begin
   if FMqtt = nil then
     Exit;
   Ts := Int64(DateTimeToUnix(Now, True)) * 1000;
-  if Ok then
-    Rj := 'null'
+  if Trim(Reason) <> '' then
+    Rj := JsonQuote(Reason)
   else
-    Rj := JsonQuote(Reason);
+    Rj := 'null';
   Js := Format(
     '{"ts":%d,"ok":%s,"reason":%s,"attempts":%d,"mqttTopic":%s,"command":%s,"viscaKind":%s,"viscaHex":%s}',
     [Ts, BoolToStr(Ok, 'true', 'false'), Rj, Attempts, JsonQuote(MqttTopic), JsonQuote(CmdPath), JsonQuote(ViscaKind),
@@ -489,6 +722,8 @@ begin
     Reason := 'visca_error';
   PublishDeviceCommandAck(Slug, Head.MqttTopic, Head.ViscaCommandPath, Ok, Reason, FInFlightSendCount[SerialBusIndex],
     Kind, HexStr);
+  if Ok then
+    RememberBridgeWireAndState(DevIdx, Head.ViscaCommandPath, Head.MqttPayloadJson, FInFlightPacket[SerialBusIndex]);
   PopQueueHead(SerialBusIndex);
   FBusTxPhase[SerialBusIndex] := btpIdle;
   SetLength(FInFlightPacket[SerialBusIndex], 0);
@@ -514,6 +749,8 @@ begin
     Slug := Row.Slug;
     PublishDeviceCommandAck(Slug, Head.MqttTopic, Head.ViscaCommandPath, True, '', FInFlightSendCount[SerialBusIndex],
       'immediate', TViscaMapping.ViscaPacketToHex(FInFlightPacket[SerialBusIndex]));
+    RememberBridgeWireAndState(Head.DeviceConfigIndex, Head.ViscaCommandPath, Head.MqttPayloadJson,
+      FInFlightPacket[SerialBusIndex]);
     PopQueueHead(SerialBusIndex);
     FBusTxPhase[SerialBusIndex] := btpIdle;
     SetLength(FInFlightPacket[SerialBusIndex], 0);
@@ -580,6 +817,14 @@ begin
     FLastTransmitTickPerBus[SerialBusIndex] := NowTick;
     Exit;
   end;
+  if PathWireCacheMatches(Head.DeviceConfigIndex, Head.ViscaCommandPath, ViscaPacket) then
+  begin
+    PublishDeviceCommandAck(DeviceRow.Slug, Head.MqttTopic, Head.ViscaCommandPath, True, 'redundant', 1, 'skipped',
+      TViscaMapping.ViscaPacketToHex(ViscaPacket));
+    PopQueueHead(SerialBusIndex);
+    FLastTransmitTickPerBus[SerialBusIndex] := NowTick;
+    Exit;
+  end;
   FInFlightPacket[SerialBusIndex] := Copy(ViscaPacket, 0, Length(ViscaPacket));
   FInFlightSendCount[SerialBusIndex] := 0;
   if not FSerialPorts[SerialBusIndex].QueueTransmit(FInFlightPacket[SerialBusIndex]) then
@@ -640,6 +885,7 @@ var
   Kind: string;
   Expected: Integer;
   CtrlJson: string;
+  EncodedProbe: TBytes;
 begin
   if Length(Frame) < 2 then
     Exit;
@@ -661,6 +907,9 @@ begin
         PublishControllerSemantic(BusId, Row.Slug, TopicPath, PayloadJson, HexStr);
         CtrlJson := Format('{"command":%s,"payload":%s,"viscaHex":%s}', [JsonQuote(TopicPath), PayloadJson, JsonQuote(HexStr)]);
         FLastControllerJson[DevIdx] := CtrlJson;
+        EncodedProbe := FViscaCommandMapping.EncodeViscaCommand(Row.Model, Row.ViscaAddress, TopicPath, PayloadJson);
+        if Length(EncodedProbe) > 0 then
+          RememberBridgeWireAndState(DevIdx, TopicPath, PayloadJson, EncodedProbe);
       end
       else
       begin

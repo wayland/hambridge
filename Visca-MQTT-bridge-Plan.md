@@ -58,11 +58,11 @@ releases extend the same daemon rather than replacing it.
   device replies → telemetry; per-device `lastController` / `lastReply` on `device/<slug>/status`.)*
   * Adds inbound VISCA decoding (RS-485 sniffing of controllers, device responses).
   * Publishes `controller/<bus>/event` semantic JSON (§3.1.1).
-  * Adds `device/<slug>/status` / `device/<slug>/telemetry` for last-known snippets; a fuller **state cache** (plan §3.5) is **not** implemented yet — see **ROADMAP.md** (**v0.3.2**).
+  * Adds `device/<slug>/status` / `device/<slug>/telemetry` for last-known snippets; **`device/<slug>/status`** also carries a **`state`** object (pan / tilt / zoom / preset last JSON) from **v0.3.2** — see §3.5.
 
 * **v0.3.1** — *Real-bus discipline and transport hardening* — **Implemented:** ACK / completion wait (`ackTimeoutMs`), **retry** (`commandRetryMax`, `retryBackoffMs`), **buffered serial writes**, **multi-byte** mapping template slots, serial **reopen**, MQTT **`device/<slug>/commandAck`**, optional per-bus **RS-485 `TIOCSRS485`**. **Nibble** slot encodings remain later. See **ROADMAP.md** / **CHANGELOG.md**.
 
-* **v0.3.2** — *Coalescing and device state cache* — continuous controls (**`scheduler.coalesce`**) and full **state manager** behaviour (plan §3.5). Tracked in **ROADMAP.md**.
+* **v0.3.2** — *Coalescing and device state cache* — **Implemented:** **`scheduler.coalesce`** queue drops, **last-wire redundant skip** + **`commandAck`**, **`state`** on **`device/<slug>/status`** (bridge + controller updates; inquiry-rich fields → **v0.3.3**). See **ROADMAP.md** / **CHANGELOG.md**.
 
 * **v0.3.3** — *Semantic decode of camera replies* — inquiries, errors, and state beyond ACK / raw **hex** on telemetry. Tracked in **ROADMAP.md**.
 
@@ -253,6 +253,8 @@ Example shape (illustrative):
 }
 ```
 
+Per-device **`scheduler`** (VISCA): **`minInterCommandMs`**, **`maxQueueDepth`**, **`ackTimeoutMs`**, **`commandRetryMax`**, **`retryBackoffMs`** (see v0.3.1). **`coalesce`** (v0.3.2) is an array of **first path segments** (e.g. `pan` matches `pan` and `pan/…` topics): before enqueueing a new command, the bridge drops older **queued** commands for the same device and segment (the command currently waiting for ACK is never removed this way).
+
 `evdev` block (when `enabled` is true):
 
 * **`inputs`**: list of sources. Each entry names **which kernel input node** to open and **where**
@@ -336,7 +338,9 @@ device/<slug>/telemetry
 device/<slug>/commandAck
 ```
 
-`device/<slug>/commandAck` (v0.3.1+): JSON result for each **bridge-originated** VISCA command (success after ACK/completion, failure on timeout / serial I/O / encode / VISCA error). Set `scheduler.ackTimeoutMs` to **0** to skip waiting for a VISCA reply (fire-and-forget; payload still reports `viscaKind` **immediate**).
+`device/<slug>/status` (v0.3.2+): JSON includes **`lastController`**, **`lastReply`**, and optional **`state`** (`pan`, `tilt`, `zoom`, `preset` keys with last-known MQTT JSON payloads from the bridge or from decoded controller traffic).
+
+`device/<slug>/commandAck` (v0.3.1+): JSON result for each **bridge-originated** VISCA command (success after ACK/completion, failure on timeout / serial I/O / encode / VISCA error). Set `scheduler.ackTimeoutMs` to **0** to skip waiting for a VISCA reply (fire-and-forget; payload still reports `viscaKind` **immediate**). **v0.3.2:** when the encoded packet matches the last successful wire for that command path, **`viscaKind`**: **`skipped`** and **`reason`**: **`redundant`** (even when **`ok`**: true).
 
 #### VISCA-controller → MQTT (semantic JSON events)
 
@@ -661,7 +665,7 @@ Publishing MQTT to **`device/camera_stage/preset/call`** with payload **`{"prese
 
 ## 3.5 State Manager
 
-*Phase: v0.3.*
+*Phase: v0.3.2 (lightweight cache + MQTT `status.state`); richer inquiry-driven fields in **v0.3.3**.*
 
 ### Responsibilities
 
@@ -811,7 +815,7 @@ committed; **`hambridge.lpr`** in `src/` is the program entry source.
   mainloop.pas                 # poll() over evdev fds + MQTT tick + VISCA router tick
   serialport.pas               # Linux serial TX (stty + fpOpen/fpWrite); v0.2+
   viscamapping.pas             # visca-mapping.json encode + controller-packet reverse decode (v0.3)
-  commandrouter.pas            # MQTT device/# → queued VISCA TX per bus
+  commandrouter.pas            # MQTT device/# → queued VISCA TX per bus; coalesce + state + redundant skip (v0.3.2)
 ```
 
 Unit responsibilities for v0.1:
