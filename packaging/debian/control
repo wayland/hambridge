@@ -10,7 +10,7 @@ Build-Depends: debhelper-compat (= 13),
  unzip,
  curl
 Standards-Version: 4.6.2
-Maintainer: HaMBridge Contributors <hambridge@users.invalid>
+Maintainer: Tim Nelson <wayland@wayland.id.au>
 # Binary Architecture must match the machine that runs dpkg-buildpackage (arm64 Pi OS 64-bit,
 # armhf Pi OS 32-bit, or amd64 Debian). Edit the next line if yours differs.
 

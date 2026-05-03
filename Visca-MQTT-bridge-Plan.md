@@ -33,7 +33,7 @@ This project implements a **bidirectional bridge between MQTT and Sony VISCA cam
 The bridge is being built in three releases. Each release is a usable end-to-end slice; later
 releases extend the same daemon rather than replacing it.
 
-* **v0.1 — evdev → MQTT** *(current focus)*
+* **v0.1 — evdev → MQTT**
   * Reads kernel input events from configured `/dev/input/event*` nodes via **libevdev**.
   * Publishes each event as JSON to MQTT (see §3.1.2).
   * No VISCA, no serial, no `device/<slug>/...` control topics, no state cache.
@@ -54,7 +54,8 @@ releases extend the same daemon rather than replacing it.
   * **`template`** is a JSON array of **slot names**; each slot becomes **one byte** on the wire. Values come from the **MQTT JSON payload** (key = slot name, case-insensitive), then fall back to **`variables`** defaults in the mapping.
   * **Raspberry Pi OS / Debian armhf & aarch64**: the root `Makefile` discovers `libevdev.so.2` under multiarch paths; see **`packaging/raspbian/README.md`** and **`make raspbian-help`**.
 
-* **v0.3 — VISCA → MQTT**
+* **v0.3 — VISCA → MQTT** *(implemented in tree: serial RX, reverse-map controller frames via visca-mapping,
+  device replies → telemetry; per-device `lastController` / `lastReply` on `device/<slug>/status`.)*
   * Adds inbound VISCA decoding (RS-485 sniffing of controllers, device responses).
   * Publishes `controller/<bus>/event` semantic JSON (§3.1.1).
   * Adds the State Manager (§3.5) and `device/<slug>/status` / `device/<slug>/telemetry` topics.
@@ -786,7 +787,7 @@ used to author code, but project files (`.lpi`, `.lpr`, `.lps`) are **not** comm
   mqttpublisher.pas            # wraps prof7bit/fpc-mqtt-client; LWT + birth + device/# subscribe
   mainloop.pas                 # poll() over evdev fds + MQTT tick + VISCA router tick
   serialport.pas               # Linux serial TX (stty + fpOpen/fpWrite); v0.2+
-  viscamapping.pas             # visca-mapping.json encoder (legacy + framed v0.2.1)
+  viscamapping.pas             # visca-mapping.json encode + controller-packet reverse decode (v0.3)
   commandrouter.pas            # MQTT device/# → queued VISCA TX per bus
 ```
 

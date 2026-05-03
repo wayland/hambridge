@@ -1,8 +1,7 @@
 unit serialport;
 
 {
-  Minimal Linux serial TX for VISCA: configure line with stty(1), then write(2) on a raw fd.
-  v0.2 is transmit-only; non-blocking read is reserved for v0.3 ACK handling.
+  Linux serial for VISCA: configure line with stty(1), write(2), and non-blocking read(2) for v0.3 RX.
 }
 
 {$mode ObjFPC}{$H+}
@@ -26,6 +25,8 @@ type
       StopBits: Integer): Boolean;
     procedure ClosePort;
     function WriteBuf(const Buf; Len: SizeUInt): Boolean;
+    { Appends up to MaxChunk bytes from the port into Dest (non-blocking). Returns number appended. }
+    function ReadNonBlockingAppend(var Dest: TBytes; MaxChunk: Integer): Integer;
     property SerialDevicePath: string read FSerialDevicePath;
     property SerialFileDescriptor: cint read FSerialFileDescriptor;
   end;
@@ -145,6 +146,27 @@ begin
     Exit;
   WrittenCount := fpWrite(FSerialFileDescriptor, @Buf, Len);
   Result := WrittenCount = ssize_t(Len);
+end;
+
+function TSerialPort.ReadNonBlockingAppend(var Dest: TBytes; MaxChunk: Integer): Integer;
+var
+  Chunk: array[0..511] of Byte;
+  ReadCount: ssize_t;
+  OldLen, I: Integer;
+begin
+  Result := 0;
+  if FSerialFileDescriptor < 0 then
+    Exit;
+  if MaxChunk > SizeInt(Length(Chunk)) then
+    MaxChunk := Length(Chunk);
+  ReadCount := fpRead(FSerialFileDescriptor, @Chunk[0], MaxChunk);
+  if ReadCount <= 0 then
+    Exit;
+  OldLen := Length(Dest);
+  SetLength(Dest, OldLen + ReadCount);
+  for I := 0 to ReadCount - 1 do
+    Dest[OldLen + I] := Chunk[I];
+  Result := ReadCount;
 end;
 
 end.

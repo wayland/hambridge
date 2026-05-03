@@ -1,8 +1,8 @@
 program hambridge;
 
 {
-  HaMBridge v0.2.1 entry: bridge.json + devices.json; optional evdev→MQTT (v0.1) and MQTT device/#→VISCA
-  with visca-mapping framed encoding + MQTT JSON (v0.2.1).
+  HaMBridge v0.3.0 entry: bridge.json + devices.json; optional evdev→MQTT (v0.1), MQTT device/#→VISCA (v0.2.1),
+  and serial VISCA RX → controller/<bus>/event + device/*/telemetry|status (v0.3).
 }
 
 {$mode ObjFPC}{$H+}
@@ -16,7 +16,7 @@ uses
   viscamapping, commandrouter;
 
 const
-  AppVersion = '0.2.1';
+  AppVersion = '0.3.0';
 
 var
   GStop: Boolean = False;
@@ -132,6 +132,7 @@ begin
     Halt(1);
   end;
 
+  Mqtt := THaMqttPublisher.Create(B);
   VMap := nil;
   Router := nil;
   if hasVisca then
@@ -144,12 +145,9 @@ begin
     end;
     LogFmt(llInfo, 'Using VISCA mapping %s', [MapPath]);
     VMap := TViscaMapping.Create(MapPath);
-    Router := TCommandRouter.Create(D, VMap);
-  end;
-
-  Mqtt := THaMqttPublisher.Create(B);
-  if Router <> nil then
+    Router := TCommandRouter.Create(D, VMap, Mqtt);
     Mqtt.OnDeviceMessage := @Router.OnMqttDeviceMessage;
+  end;
   Hub := TEvdevHub.Create;
   try
     if hasEvdev then

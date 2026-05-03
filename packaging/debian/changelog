@@ -1,5 +1,11 @@
+hambridge (0.3.0-1) unstable; urgency=medium
+
+  * v0.3.0: VISCA serial RX, controller/<bus>/event, device telemetry/status.
+
+ -- Tim Nelson <wayland@wayland.id.au>  Sat, 02 May 2026 14:00:00 +0000
+
 hambridge (0.2.1-1) unstable; urgency=medium
 
   * Initial Debian / Raspberry Pi OS packaging (native FPC build).
 
- -- HaMBridge Contributors <hambridge@users.invalid>  Sat, 02 May 2026 12:00:00 +0000
+ -- Tim Nelson <wayland@wayland.id.au>  Sat, 02 May 2026 12:00:00 +0000
