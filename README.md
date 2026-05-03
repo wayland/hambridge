@@ -13,15 +13,6 @@ pinned [fpc-mqtt-client](https://github.com/prof7bit/fpc-mqtt-client) release (n
 `unzip`, and network access). Packaging helpers (systemd, udev, sysusers) live under
 [packaging/](packaging/).
 
-## Roadmap (summary)
-
-- **v0.1** — evdev → MQTT: configured `/dev/input/event*` via `libevdev`, JSON to MQTT.
-- **v0.2** — MQTT → VISCA: `device/<slug>/<command>`, serial TX, `visca-mapping.json`.
-- **v0.2.1** — Framed mapping + MQTT JSON template slots.
-- **v0.3** — VISCA → MQTT: serial RX, `controller/<bus>/event`, device telemetry/status.
-
-Later **v0.3.1**–**v0.3.3** items are listed in [ROADMAP.md](ROADMAP.md).
-
 ## Requirements (runtime)
 
 - **Linux** (v0.1 targets the Linux input subsystem).
@@ -80,3 +71,8 @@ v0.2 lands.
 GPL-3.0-or-later. See [LICENSE](LICENSE) for the full text.
 
 `SPDX-License-Identifier: GPL-3.0-or-later`
+
+## Other documents
+
+* [ROADMAP.md](ROADMAP.md)
+* [CHANGELOG.md](CHANGELOG.md)

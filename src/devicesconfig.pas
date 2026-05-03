@@ -19,6 +19,14 @@ type
     MqttTopic: string;
   end;
 
+  TRs485BusConfig = record
+    Enabled: Boolean;
+    RtsOnSend: Boolean;
+    RtsAfterSend: Boolean;
+    DelayRtsBeforeSend: Cardinal;
+    DelayRtsAfterSend: Cardinal;
+  end;
+
   TSerialBusConfig = record
     Id: string;
     Port: string;
@@ -26,6 +34,7 @@ type
     DataBits: Integer;
     Parity: Char;
     StopBits: Integer;
+    Rs485: TRs485BusConfig;
   end;
 
   TViscaDeviceConfig = record
@@ -35,6 +44,9 @@ type
     ViscaAddress: Byte;        { VISCA peripheral address 1..7 from JSON "viscaAddress" }
     MinInterCommandMs: Cardinal;
     MaxQueueDepth: Cardinal;
+    AckTimeoutMs: Cardinal;     { 0 = do not wait for VISCA reply before next command }
+    CommandRetryMax: Cardinal; { extra attempts after first TX (0 = no retries) }
+    RetryBackoffMs: Cardinal; { delay before each retry }
   end;
 
   TSerialBusDyn = array of TSerialBusConfig;
@@ -164,7 +176,7 @@ var
   BObj: TJSONObject;
   I: Integer;
   Name: string;
-  Row: TJSONObject;
+  Row, Rs485Obj: TJSONObject;
 begin
   SetLength(Buses, 0);
   BObj := ObjGetObjectCI(Root, 'buses');
@@ -183,6 +195,16 @@ begin
     Buses[I].DataBits := JsonGetInt(Row, 'dataBits', 8);
     Buses[I].Parity := JsonGetChar(Row, 'parity', 'N');
     Buses[I].StopBits := JsonGetInt(Row, 'stopBits', 1);
+    FillChar(Buses[I].Rs485, SizeOf(Buses[I].Rs485), 0);
+    Rs485Obj := ObjGetObjectCI(Row, 'rs485');
+    if Rs485Obj <> nil then
+    begin
+      Buses[I].Rs485.Enabled := JsonGetBool(Rs485Obj, 'enabled', False);
+      Buses[I].Rs485.RtsOnSend := JsonGetBool(Rs485Obj, 'rtsOnSend', True);
+      Buses[I].Rs485.RtsAfterSend := JsonGetBool(Rs485Obj, 'rtsAfterSend', False);
+      Buses[I].Rs485.DelayRtsBeforeSend := Cardinal(Max(0, JsonGetInt(Rs485Obj, 'delayRtsBeforeSend', 0)));
+      Buses[I].Rs485.DelayRtsAfterSend := Cardinal(Max(0, JsonGetInt(Rs485Obj, 'delayRtsAfterSend', 0)));
+    end;
     if Buses[I].Port = '' then
       raise Exception.Create('devices.json: bus "' + Name + '" needs port');
   end;
@@ -215,11 +237,17 @@ begin
     Devs[I].ViscaAddress := Byte(addr);
     Devs[I].MinInterCommandMs := 40;
     Devs[I].MaxQueueDepth := 50;
+    Devs[I].AckTimeoutMs := 800;
+    Devs[I].CommandRetryMax := 2;
+    Devs[I].RetryBackoffMs := 50;
     Sch := ObjGetObjectCI(Item, 'scheduler');
     if Sch <> nil then
     begin
       Devs[I].MinInterCommandMs := Cardinal(Max(1, JsonGetInt(Sch, 'minInterCommandMs', 40)));
       Devs[I].MaxQueueDepth := Cardinal(Max(1, JsonGetInt(Sch, 'maxQueueDepth', 50)));
+      Devs[I].AckTimeoutMs := Cardinal(Max(0, JsonGetInt(Sch, 'ackTimeoutMs', 800)));
+      Devs[I].CommandRetryMax := Cardinal(Max(0, JsonGetInt(Sch, 'commandRetryMax', 2)));
+      Devs[I].RetryBackoffMs := Cardinal(Max(0, JsonGetInt(Sch, 'retryBackoffMs', 50)));
     end;
     if Devs[I].Model = '' then
       raise Exception.Create('devices.json: VISCA device slug "' + Devs[I].Slug + '" needs model');

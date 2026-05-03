@@ -60,7 +60,7 @@ releases extend the same daemon rather than replacing it.
   * Publishes `controller/<bus>/event` semantic JSON (§3.1.1).
   * Adds `device/<slug>/status` / `device/<slug>/telemetry` for last-known snippets; a fuller **state cache** (plan §3.5) is **not** implemented yet — see **ROADMAP.md** (**v0.3.2**).
 
-* **v0.3.1** — *Real-bus discipline and transport hardening* — ACK / completion discipline, **retry**, **buffered serial writes**, **multi-byte** mapping template slots, serial recovery, MQTT acks, RS-485 half-duplex. **Nibble** slot encodings remain later. Tracked in **ROADMAP.md**.
+* **v0.3.1** — *Real-bus discipline and transport hardening* — **Implemented:** ACK / completion wait (`ackTimeoutMs`), **retry** (`commandRetryMax`, `retryBackoffMs`), **buffered serial writes**, **multi-byte** mapping template slots, serial **reopen**, MQTT **`device/<slug>/commandAck`**, optional per-bus **RS-485 `TIOCSRS485`**. **Nibble** slot encodings remain later. See **ROADMAP.md** / **CHANGELOG.md**.
 
 * **v0.3.2** — *Coalescing and device state cache* — continuous controls (**`scheduler.coalesce`**) and full **state manager** behaviour (plan §3.5). Tracked in **ROADMAP.md**.
 
@@ -213,7 +213,14 @@ Example shape (illustrative):
       "baud": 9600,
       "dataBits": 8,
       "parity": "N",
-      "stopBits": 1
+      "stopBits": 1,
+      "rs485": {
+        "enabled": false,
+        "rtsOnSend": true,
+        "rtsAfterSend": false,
+        "delayRtsBeforeSend": 0,
+        "delayRtsAfterSend": 0
+      }
     }
   },
   "devices": [
@@ -225,6 +232,8 @@ Example shape (illustrative):
       "scheduler": {
         "minInterCommandMs": 50,
         "ackTimeoutMs": 500,
+        "commandRetryMax": 2,
+        "retryBackoffMs": 50,
         "maxQueueDepth": 50,
         "coalesce": ["pan", "tilt", "zoom"]
       }
@@ -324,7 +333,10 @@ device/<slug>/<command>
 ```
 device/<slug>/status
 device/<slug>/telemetry
+device/<slug>/commandAck
 ```
+
+`device/<slug>/commandAck` (v0.3.1+): JSON result for each **bridge-originated** VISCA command (success after ACK/completion, failure on timeout / serial I/O / encode / VISCA error). Set `scheduler.ackTimeoutMs` to **0** to skip waiting for a VISCA reply (fire-and-forget; payload still reports `viscaKind` **immediate**).
 
 #### VISCA-controller → MQTT (semantic JSON events)
 
@@ -573,7 +585,7 @@ The mapping file must support:
 
 * **Per-model selection**: e.g. `"model": "marshall-cv344"` assigned per `device/<slug>`
 * **Topic → VISCA frame(s)**: static byte sequences (hex) and/or **framed** rules (fixed middle + template slots)
-* **Optional parameters**: MQTT JSON and `variables` defaults supply **one byte per template slot** (v0.2.1). **Multi-byte** slots per template entry are planned for **v0.3.1** (see **ROADMAP.md**). **Nibble** and other exotic slot encodings remain a later extension.
+* **Optional parameters**: MQTT JSON and `variables` defaults supply values per template slot. A slot is **one wire byte** when the template entry is a **string** name (v0.2.1), or **1..8 bytes** when the entry is an object with **`slot`** and **`width`** (v0.3.1); values are a big-endian integer or a JSON **array** of byte-sized numbers. **Nibble** and other exotic encodings remain a later extension.
 
 #### Wire assembly (v0.2.1)
 

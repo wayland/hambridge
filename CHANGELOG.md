@@ -2,6 +2,15 @@
 
 Notable changes to **HaMBridge** (this repository). Release history for packaging metadata remains in `packaging/debian/changelog` (Debian) and the RPM spec where required by those formats.
 
+## [0.3.1] — 2026-05-02
+
+### Added
+
+- **VISCA command lifecycle** (`commandrouter`): per-bus state machine — drain TX queue, wait for device **ACK / completion / error** (or `scheduler.ackTimeoutMs` timeout), **`commandRetryMax`** resends with **`retryBackoffMs`**. **`ackTimeoutMs`: 0** skips wait and publishes **`commandAck`** with `viscaKind` **immediate**.
+- **MQTT `device/<slug>/commandAck`**: JSON with `ok`, `reason`, `attempts`, `mqttTopic`, `command`, `viscaKind`, `viscaHex`.
+- **Serial** (`serialport`): software **TX queue** (up to 8 KiB), **`PumpTransmit`** for partial **`write`** / **`EAGAIN`**; **reopen** with backoff after hard read/write errors; optional **`TIOCSRS485`** from **`devices.json`** `buses.<id>.rs485`.
+- **`visca-mapping.json`**: template slots as **string** (one byte) or **object** `slot` + **`width`** (1..8); MQTT / `variables` value as integer (big-endian) or JSON **array** of bytes. Controller reverse-decode updated.
+
 ## [0.3.0] — 2026-05-02
 
 ### Added

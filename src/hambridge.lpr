@@ -1,8 +1,8 @@
 program hambridge;
 
 {
-  HaMBridge v0.3.0 entry: bridge.json + devices.json; optional evdev→MQTT (v0.1), MQTT device/#→VISCA (v0.2.1),
-  and serial VISCA RX → controller/<bus>/event + device/*/telemetry|status (v0.3).
+  HaMBridge v0.3.1 entry: bridge.json + devices.json; optional evdev→MQTT (v0.1), MQTT device/#→VISCA (v0.2.1),
+  serial VISCA RX (v0.3), and real-bus discipline: ACK wait/retry, TX queue, reopen, commandAck, RS485 ioctl (v0.3.1).
 }
 
 {$mode ObjFPC}{$H+}
@@ -16,7 +16,7 @@ uses
   viscamapping, commandrouter;
 
 const
-  AppVersion = '0.3.0';
+  AppVersion = '0.3.1';
 
 var
   GStop: Boolean = False;

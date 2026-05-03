@@ -4,6 +4,8 @@ unit viscamapping;
   Loads visca-mapping.json (plan §3.3): per-model topic → VISCA packets.
   v0.2.1: framed encoding (device byte + optional fixed middle hex + template slots + FF) with MQTT JSON
   and "variables" defaults; if template is absent/empty, bytes alone is the full middle (after device byte, before FF).
+  v0.3.1: each template slot may be 1..8 wire bytes (JSON object with slot + width keys, or string = width 1);
+  multi-byte values from MQTT: integer big-endian or JSON array of byte-sized numbers.
 }
 
 {$mode ObjFPC}{$H+}
@@ -23,6 +25,8 @@ type
     function EncodeFixedMiddleOnlyPacket(TopicDef: TJSONObject; ViscaAddress: Byte): TBytes;
     function EncodeFramedPacket(TopicDef: TJSONObject; ViscaAddress: Byte; const MqttPayloadJson: string): TBytes;
     function ResolveTemplateSlotByte(const SlotName: string; SlotDefaults, MqttPayload: TJSONObject): Integer;
+    function ResolveTemplateSlotBytes(const SlotName: string; Width: Integer; SlotDefaults,
+      MqttPayload: TJSONObject): TBytes;
     function JsonValueToByte(Data: TJSONData): Integer;
     function TryMatchTopicDef(ModelObj: TJSONObject; const TopicPath: string; ViscaAddress: Byte; const Packet: TBytes;
       out PayloadJson: string): Boolean;
@@ -147,6 +151,148 @@ begin
   end;
 end;
 
+function JsonIntFromObject(Obj: TJSONObject; const Key: string; Default: Integer): Integer;
+var
+  Data: TJSONData;
+begin
+  Result := Default;
+  if Obj = nil then
+    Exit;
+  Data := ObjFindCI(Obj, Key);
+  if Data = nil then
+    Exit;
+  if Data is TJSONNumber then
+    Exit(Integer(TJSONNumber(Data).AsInt64));
+  if Data is TJSONString then
+    Exit(StrToIntDef(TJSONString(Data).AsString, Default));
+end;
+
+procedure ParseTemplateSlotEntry(Item: TJSONData; out SlotName: string; out Width: Integer; out Ok: Boolean);
+var
+  O: TJSONObject;
+  W: Integer;
+begin
+  Ok := False;
+  SlotName := '';
+  Width := 1;
+  if Item is TJSONString then
+  begin
+    SlotName := Trim(TJSONString(Item).AsString);
+    Ok := SlotName <> '';
+    Exit;
+  end;
+  if Item is TJSONObject then
+  begin
+    O := TJSONObject(Item);
+    SlotName := Trim(JsonGetStringFromObject(O, 'slot', ''));
+    if SlotName = '' then
+      SlotName := Trim(JsonGetStringFromObject(O, 'name', ''));
+    W := JsonIntFromObject(O, 'width', 0);
+    if W <= 0 then
+      W := JsonIntFromObject(O, 'bytes', 1);
+    Width := Max(1, Min(8, W));
+    Ok := SlotName <> '';
+  end;
+end;
+
+procedure BeStoreUInt(v: QWord; Width: Integer; Dest: PByte);
+var
+  Shift: Integer;
+  B: Integer;
+begin
+  for B := Width - 1 downto 0 do
+  begin
+    Shift := B * 8;
+    Dest[Width - 1 - B] := Byte((v shr Shift) and $FF);
+  end;
+end;
+
+function UIntFitsBeWidth(v: QWord; Width: Integer): Boolean;
+var
+  Bits: Integer;
+begin
+  if Width >= 8 then
+    Exit(True);
+  Bits := Width * 8;
+  if Bits >= 64 then
+    Exit(True);
+  Result := v < (QWord(1) shl Bits);
+end;
+
+function TViscaCommandMapping.ResolveTemplateSlotBytes(const SlotName: string; Width: Integer; SlotDefaults,
+  MqttPayload: TJSONObject): TBytes;
+var
+  Data: TJSONData;
+  I: Integer;
+  v: QWord;
+  vi: Int64;
+  Arr: TJSONArray;
+begin
+  SetLength(Result, 0);
+  if Width < 1 then
+    Exit;
+  SetLength(Result, Width);
+  Data := nil;
+  if MqttPayload <> nil then
+    Data := ObjFindCI(MqttPayload, SlotName);
+  if Data = nil then
+  begin
+    if SlotDefaults <> nil then
+      Data := ObjFindCI(SlotDefaults, SlotName);
+  end;
+  if Data = nil then
+  begin
+    SetLength(Result, 0);
+    Exit;
+  end;
+  if Data is TJSONArray then
+  begin
+    Arr := TJSONArray(Data);
+    if Arr.Count < Width then
+    begin
+      SetLength(Result, 0);
+      Exit;
+    end;
+    for I := 0 to Width - 1 do
+    begin
+      if JsonValueToByte(Arr.Items[I]) < 0 then
+      begin
+        SetLength(Result, 0);
+        Exit;
+      end;
+      Result[I] := Byte(JsonValueToByte(Arr.Items[I]));
+    end;
+    Exit;
+  end;
+  if Data is TJSONNumber then
+  begin
+    vi := TJSONNumber(Data).AsInt64;
+    if vi < 0 then
+    begin
+      SetLength(Result, 0);
+      Exit;
+    end;
+    v := QWord(vi);
+    if not UIntFitsBeWidth(v, Width) then
+    begin
+      SetLength(Result, 0);
+      Exit;
+    end;
+    BeStoreUInt(v, Width, @Result[0]);
+    Exit;
+  end;
+  if Width = 1 then
+  begin
+    I := JsonValueToByte(Data);
+    if I < 0 then
+      SetLength(Result, 0)
+    else
+      Result[0] := Byte(I);
+    Exit;
+  end;
+  SetLength(Result, 0);
+end;
+
 function TViscaCommandMapping.EncodeFramedPacket(TopicDef: TJSONObject; ViscaAddress: Byte;
   const MqttPayloadJson: string): TBytes;
 var
@@ -156,9 +302,10 @@ var
   MqttPayload: TJSONObject;
   Parser: TJSONParser;
   PayloadData: TJSONData;
-  I: Integer;
+  I, J, OutPos, TotalSlotBytes, SlotW: Integer;
   SlotName: string;
-  ByteVal: Integer;
+  Ok: Boolean;
+  SlotBytes: TBytes;
   DeviceByte: Byte;
   Stream: TStringStream;
 begin
@@ -199,30 +346,36 @@ begin
   end;
   try
     DeviceByte := Byte($80 + Min(Max(ViscaAddress, 1), 7));
-    SetLength(Result, 1 + Length(FixedMiddle) + TemplateArray.Count + 1);
+    TotalSlotBytes := 0;
+    for I := 0 to TemplateArray.Count - 1 do
+    begin
+      ParseTemplateSlotEntry(TemplateArray.Items[I], SlotName, SlotW, Ok);
+      if not Ok then
+      begin
+        SetLength(Result, 0);
+        Exit;
+      end;
+      Inc(TotalSlotBytes, SlotW);
+    end;
+    SetLength(Result, 1 + Length(FixedMiddle) + TotalSlotBytes + 1);
     Result[0] := DeviceByte;
     for I := 0 to High(FixedMiddle) do
       Result[1 + I] := FixedMiddle[I];
+    OutPos := 1 + Length(FixedMiddle);
     for I := 0 to TemplateArray.Count - 1 do
     begin
-      if not (TemplateArray.Items[I] is TJSONString) then
+      ParseTemplateSlotEntry(TemplateArray.Items[I], SlotName, SlotW, Ok);
+      SlotBytes := ResolveTemplateSlotBytes(SlotName, SlotW, SlotDefaults, MqttPayload);
+      if Length(SlotBytes) <> SlotW then
       begin
         SetLength(Result, 0);
         Exit;
       end;
-      SlotName := Trim(TJSONString(TemplateArray.Items[I]).AsString);
-      if SlotName = '' then
+      for J := 0 to SlotW - 1 do
       begin
-        SetLength(Result, 0);
-        Exit;
+        Result[OutPos] := SlotBytes[J];
+        Inc(OutPos);
       end;
-      ByteVal := ResolveTemplateSlotByte(SlotName, SlotDefaults, MqttPayload);
-      if ByteVal < 0 then
-      begin
-        SetLength(Result, 0);
-        Exit;
-      end;
-      Result[1 + Length(FixedMiddle) + I] := Byte(ByteVal);
     end;
     Result[High(Result)] := $FF;
   finally
@@ -423,9 +576,10 @@ var
   TopicDef: TJSONObject;
   FixedMiddle: TBytes;
   TemplateArray: TJSONArray;
-  ExpectedLen, I, SlotIndex: Integer;
+  ExpectedLen, I, SlotIndex, Off, TotalSlotBytes, SlotW: Integer;
   DeviceByte: Byte;
   SlotName: string;
+  Ok: Boolean;
 begin
   Result := False;
   PayloadJson := '';
@@ -454,29 +608,56 @@ begin
     Result := True;
     Exit;
   end;
-  ExpectedLen := 1 + Length(FixedMiddle) + TemplateArray.Count + 1;
+  TotalSlotBytes := 0;
+  for SlotIndex := 0 to TemplateArray.Count - 1 do
+  begin
+    ParseTemplateSlotEntry(TemplateArray.Items[SlotIndex], SlotName, SlotW, Ok);
+    if not Ok then
+      Exit;
+    Inc(TotalSlotBytes, SlotW);
+  end;
+  ExpectedLen := 1 + Length(FixedMiddle) + TotalSlotBytes + 1;
   if Length(Packet) <> ExpectedLen then
     Exit;
   for I := 0 to High(FixedMiddle) do
     if Packet[1 + I] <> FixedMiddle[I] then
       Exit;
   PayloadJson := '{';
+  Off := 1 + Length(FixedMiddle);
   for SlotIndex := 0 to TemplateArray.Count - 1 do
   begin
-    if not (TemplateArray.Items[SlotIndex] is TJSONString) then
-    begin
-      PayloadJson := '';
-      Exit;
-    end;
-    SlotName := Trim(TJSONString(TemplateArray.Items[SlotIndex]).AsString);
-    if SlotName = '' then
+    ParseTemplateSlotEntry(TemplateArray.Items[SlotIndex], SlotName, SlotW, Ok);
+    if not Ok then
     begin
       PayloadJson := '';
       Exit;
     end;
     if SlotIndex > 0 then
       PayloadJson := PayloadJson + ',';
-    PayloadJson := PayloadJson + '"' + SlotName + '":' + IntToStr(Packet[1 + Length(FixedMiddle) + SlotIndex]);
+    if SlotW <= 0 then
+    begin
+      PayloadJson := '';
+      Exit;
+    end;
+    if Off + SlotW > Length(Packet) - 1 then
+    begin
+      PayloadJson := '';
+      Exit;
+    end;
+    if SlotW = 1 then
+      PayloadJson := PayloadJson + '"' + SlotName + '":' + IntToStr(Packet[Off])
+    else
+    begin
+      PayloadJson := PayloadJson + '"' + SlotName + '":[';
+      for I := 0 to SlotW - 1 do
+      begin
+        if I > 0 then
+          PayloadJson := PayloadJson + ',';
+        PayloadJson := PayloadJson + IntToStr(Packet[Off + I]);
+      end;
+      PayloadJson := PayloadJson + ']';
+    end;
+    Inc(Off, SlotW);
   end;
   PayloadJson := PayloadJson + '}';
   Result := True;

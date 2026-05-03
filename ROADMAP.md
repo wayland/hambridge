@@ -14,13 +14,13 @@ This file lists **planned or deferred work** compared to [`Visca-MQTT-bridge-Pla
 
 ### v0.3.1 checklist
 
-- [ ] **ACK / completion discipline** — Parse `scheduler.ackTimeoutMs` (and related rules); after each bridge-originated command, wait for VISCA ACK / completion or **timeout** before sending the next command for that device (or bus policy TBD).
-- [ ] **Serial reconnection / recovery** — Reopen the TTY on `ENODEV` / hard I/O errors with backoff; today ports are opened once at startup.
-- [ ] **MQTT acknowledgements after bridge-originated VISCA TX** — Plan §4 optional path: publish an ack/nack (or completion) to MQTT tied to commands the bridge sent.
-- [ ] **RS-485 half-duplex / direction / collisions** — Driver-level `TIOCSRS485` or DE/RE control, documented behaviour when a **controller** and the **bridge** share the same bus; not multi-master software arbitration unless explicitly scoped later.
-- [ ] **Retry failed VISCA commands** — Policy TBD (counts, backoff, which errors are retryable); ties naturally to ACK / completion and MQTT nack/ack behaviour.
-- [ ] **Multi-byte template slots** — Extend `visca-mapping.json` / encoder so a template slot can expand to **more than one** wire byte from MQTT JSON or `variables` (plan §3.3 today is one byte per slot). **Nibble-packed and other exotic slot encodings** stay deferred beyond v0.3.1.
-- [ ] **Buffered serial writes** — Handle **partial `write()`**, `EAGAIN`, and/or a small TX queue so outbound VISCA bytes are not dropped under load (plan §3.4 “buffered writes”).
+- [x] **ACK / completion discipline** — Parse `scheduler.ackTimeoutMs`; after each bridge-originated command, wait for VISCA ACK / completion / error or **timeout** before the next command on that bus. **`ackTimeoutMs`: 0** skips the wait (see plan §3.1.1).
+- [x] **Serial reconnection / recovery** — Reopen the TTY after hard read/write errors with exponential backoff (`serialport`).
+- [x] **MQTT acknowledgements after bridge-originated VISCA TX** — Publish JSON on **`device/<slug>/commandAck`** (`ok`, `reason`, `attempts`, `viscaKind`, `viscaHex`, …).
+- [x] **RS-485 half-duplex / direction / collisions** — Optional per-bus **`rs485`** block in `devices.json`: `TIOCSRS485` (`enabled`, `rtsOnSend`, `rtsAfterSend`, delays). Shared-bus collision behaviour remains deployment-defined; no software multi-master arbitration.
+- [x] **Retry failed VISCA commands** — `scheduler.commandRetryMax` (extra attempts after the first TX) and **`retryBackoffMs`** before each resend; final failure publishes **`commandAck`** with `reason: timeout`.
+- [x] **Multi-byte template slots** — Template array entries may be strings (1 byte) or objects **`slot` + `width`** (1..8); MQTT / `variables` supply a big-endian integer or a byte array. **Nibbles** remain deferred (ROADMAP).
+- [x] **Buffered serial writes** — Software TX queue + **`PumpTransmit`** handles partial **`write()`** and **`EAGAIN`** (non-blocking fd).
 
 ---
 
