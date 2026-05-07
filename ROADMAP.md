@@ -38,11 +38,12 @@ This file lists **planned or deferred work** compared to [`Visca-MQTT-bridge-Pla
 
 ## v0.3.3 — Semantic decode of camera replies
 
-**Intent:** turn device-side VISCA **replies** into structured meaning beyond ACK / completion / hex on telemetry.
+**Intent:** turn device-side VISCA **replies** into structured meaning beyond ACK / completion / hex on telemetry, and publish a **per-bus controller status** topic alongside events.
 
 ### v0.3.3 checklist
 
-- [ ] **Semantic decode of device replies** — Inquiry results, error payloads, pan/tilt/zoom where the wire format allows it; richer JSON on `device/<slug>/telemetry` (and/or status) than today’s `kind` + `viscaHex`.
+- [x] **Semantic decode of device replies** — `device/<slug>/telemetry` and `lastReply` on **`device/<slug>/status`** include optional **`decode`** (replyClass ack/completion/error/data, **socket**, **payload** byte array, **code** for errors). Generic VISCA framing (90..96, 4x/5x/60); not model-specific inquiry tables (future refinement).
+- [x] **`controller/<bus>/status`** — JSON with **`lastController`** (last semantic or raw controller event summary) and **`lastDeviceReply`** (last device reply summary + **decode** when present). Published after each **`controller/<bus>/event`** and after each device reply on that bus.
 
 ---
 
@@ -56,7 +57,7 @@ ACK / completion timing and **`scheduler.ackTimeoutMs`** are tracked under **v0.
 
 - [ ] **Nibble / exotic template slot encodings** — Still deferred (not in v0.3.1 multi-byte scope).
 
-**Decode / retry / mapping / TX:** semantic decode of camera replies → **v0.3.3** above; retry, **multi-byte slots**, and **buffered serial writes** → **v0.3.1** above.
+**Decode / retry / mapping / TX:** semantic decode of camera replies and **`controller/<bus>/status`** → **v0.3.3** above; retry, **multi-byte slots**, and **buffered serial writes** → **v0.3.1** above.
 
 ## Serial layer (plan §3.4, §7)
 
@@ -64,7 +65,6 @@ ACK / completion timing and **`scheduler.ackTimeoutMs`** are tracked under **v0.
 
 ## MQTT & `bridge.json` (plan §3.0–3.1, §7)
 
-- [ ] **`controller/<bus>/status`** — Suggested in plan alongside `controller/<bus>/event`; not published today.
 - [ ] **`log.format`: `json`** — Still reserved; operational logging is effectively **text** only.
 - [ ] **Full TLS configuration** — CA bundle, client cert/key, `verifyPeer`, etc.; beyond **`tls: true`** + OS default trust.
 - [ ] **Broader QoS usage** — Generic `PublishJson` uses **QoS 0** for evdev / VISCA-side publishes; not a full “QoS 0 and 1 everywhere” productization.

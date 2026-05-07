@@ -2,6 +2,13 @@
 
 Notable changes to **HaMBridge** (this repository). Release history for packaging metadata remains in `packaging/debian/changelog` (Debian) and the RPM spec where required by those formats.
 
+## [0.3.3] — 2026-05-02
+
+### Added
+
+- **Device reply decode** — `device/<slug>/telemetry` and **`lastReply`** on **`device/<slug>/status`** may include a **`decode`** object (generic VISCA: **replyClass**, **socket**, **payload** / **code** as applicable) via `viscareplydecode`.
+- **`controller/<bus>/status`** — JSON snapshot with **`lastController`** and **`lastDeviceReply`** (objects or `null`), published after **`controller/<bus>/event`** and after device replies on that bus.
+
 ## [0.3.2] — 2026-05-02
 
 ### Added

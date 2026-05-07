@@ -8,6 +8,7 @@ unit commandrouter;
   v0.3.1: ACK wait + retry (scheduler), TX queue + pump, serial reopen, MQTT device/<slug>/commandAck,
         optional per-bus rs485 ioctl from devices.json.
   v0.3.2: scheduler.coalesce queue drops, last-wire skip for redundant VISCA, state snapshot on status.
+  v0.3.3: device reply decode on telemetry/status; controller/<bus>/status bus snapshot.
 }
 
 {$mode ObjFPC}{$H+}
@@ -16,7 +17,7 @@ interface
 
 uses
   SysUtils, Classes, ctypes,
-  devicesconfig, viscamapping, serialport, logger, mqttpublisher;
+  devicesconfig, viscamapping, serialport, logger, mqttpublisher, viscareplydecode;
 
 const
   MaxViscaRxAccum = 512;
@@ -66,6 +67,8 @@ type
     FRetryResumeTick: array of QWord;
     FPathWireCache: array of array of TPathLastWire;
     FStateSnap: array of TDeviceStateSnap;
+    FLastBusCtrlEventJson: array of string;
+    FLastBusDeviceReplyJson: array of string;
     function IndexOfSerialBusByConfigId(const BusId: string): Integer;
     function IndexOfViscaDeviceByTopicSlug(const TopicSlug: string): Integer;
     function IndexOfViscaDeviceOnBusByReplyByte(SerialBusIndex: Integer; ReplyFirst: Byte): Integer;
@@ -75,7 +78,8 @@ type
     procedure HandleCompleteViscaFrame(SerialBusIndex: Integer; const Frame: TBytes);
     procedure PublishControllerSemantic(const BusId, DeviceSlug, CommandPath, PayloadJson, HexTrace: string);
     procedure PublishControllerRawEvent(const BusId, HexTrace: string);
-    procedure PublishDeviceTelemetry(const DeviceSlug, Kind, HexTrace: string);
+    procedure PublishDeviceTelemetry(const DeviceSlug, Kind, HexTrace: string; const DecodeJsonObject: string = '');
+    procedure PublishControllerBusSnapshot(SerialBusIndex: Integer);
     procedure PublishDeviceStatusMerge(const DeviceSlug: string; DevIdx: Integer);
     procedure PublishDeviceCommandAck(const DeviceSlug, MqttTopic, CmdPath: string; Ok: Boolean;
       const Reason: string; Attempts: Integer; const ViscaKind, ViscaHex: string);
@@ -345,6 +349,13 @@ begin
       LogFmt(llWarn, 'visca: could not open serial bus "%s" (%s)',
         [FDeviceConfiguration.Buses[BusLoopIndex].Id, FDeviceConfiguration.Buses[BusLoopIndex].Port]);
   end;
+  SetLength(FLastBusCtrlEventJson, Length(FDeviceConfiguration.Buses));
+  SetLength(FLastBusDeviceReplyJson, Length(FDeviceConfiguration.Buses));
+  for BusLoopIndex := 0 to High(FLastBusCtrlEventJson) do
+  begin
+    FLastBusCtrlEventJson[BusLoopIndex] := '';
+    FLastBusDeviceReplyJson[BusLoopIndex] := '';
+  end;
   SetLength(FLastControllerJson, Length(FDeviceConfiguration.ViscaDevices));
   SetLength(FLastReplyJson, Length(FDeviceConfiguration.ViscaDevices));
   for DeviceLoopIndex := 0 to High(FLastControllerJson) do
@@ -590,6 +601,7 @@ procedure TCommandRouter.PublishControllerSemantic(const BusId, DeviceSlug, Comm
 var
   Js: string;
   Ts: Int64;
+  BusIx: Integer;
 begin
   if FMqtt = nil then
     Exit;
@@ -597,12 +609,20 @@ begin
   Js := Format('{"ts":%d,"bus":%s,"source":"controller","command":%s,"deviceSlug":%s,"payload":%s,"trace":{"viscaHex":%s}}',
     [Ts, JsonQuote(BusId), JsonQuote(CommandPath), JsonQuote(DeviceSlug), PayloadJson, JsonQuote(HexTrace)]);
   FMqtt.PublishJson('controller/' + BusId + '/event', Js);
+  BusIx := IndexOfSerialBusByConfigId(BusId);
+  if BusIx >= 0 then
+  begin
+    FLastBusCtrlEventJson[BusIx] := Format('{"deviceSlug":%s,"command":%s,"payload":%s,"viscaHex":%s}',
+      [JsonQuote(DeviceSlug), JsonQuote(CommandPath), PayloadJson, JsonQuote(HexTrace)]);
+    PublishControllerBusSnapshot(BusIx);
+  end;
 end;
 
 procedure TCommandRouter.PublishControllerRawEvent(const BusId, HexTrace: string);
 var
   Js: string;
   Ts: Int64;
+  BusIx: Integer;
 begin
   if FMqtt = nil then
     Exit;
@@ -610,9 +630,40 @@ begin
   Js := Format('{"ts":%d,"bus":%s,"source":"controller","command":"event","payload":{"raw":true,"viscaHex":%s},"trace":{"viscaHex":%s}}',
     [Ts, JsonQuote(BusId), JsonQuote(HexTrace), JsonQuote(HexTrace)]);
   FMqtt.PublishJson('controller/' + BusId + '/event', Js);
+  BusIx := IndexOfSerialBusByConfigId(BusId);
+  if BusIx >= 0 then
+  begin
+    FLastBusCtrlEventJson[BusIx] := Format('{"command":"event","payload":{"raw":true,"viscaHex":%s},"viscaHex":%s}',
+      [JsonQuote(HexTrace), JsonQuote(HexTrace)]);
+    PublishControllerBusSnapshot(BusIx);
+  end;
 end;
 
-procedure TCommandRouter.PublishDeviceTelemetry(const DeviceSlug, Kind, HexTrace: string);
+procedure TCommandRouter.PublishControllerBusSnapshot(SerialBusIndex: Integer);
+var
+  BusId: string;
+  Ts: Int64;
+  Ctrl, Devp, Js: string;
+begin
+  if FMqtt = nil then
+    Exit;
+  if (SerialBusIndex < 0) or (SerialBusIndex > High(FDeviceConfiguration.Buses)) then
+    Exit;
+  BusId := FDeviceConfiguration.Buses[SerialBusIndex].Id;
+  Ts := Int64(DateTimeToUnix(Now, True)) * 1000;
+  if FLastBusCtrlEventJson[SerialBusIndex] = '' then
+    Ctrl := 'null'
+  else
+    Ctrl := FLastBusCtrlEventJson[SerialBusIndex];
+  if FLastBusDeviceReplyJson[SerialBusIndex] = '' then
+    Devp := 'null'
+  else
+    Devp := FLastBusDeviceReplyJson[SerialBusIndex];
+  Js := Format('{"ts":%d,"bus":%s,"lastController":%s,"lastDeviceReply":%s}', [Ts, JsonQuote(BusId), Ctrl, Devp]);
+  FMqtt.PublishJson('controller/' + BusId + '/status', Js);
+end;
+
+procedure TCommandRouter.PublishDeviceTelemetry(const DeviceSlug, Kind, HexTrace: string; const DecodeJsonObject: string);
 var
   Js: string;
   Ts: Int64;
@@ -620,7 +671,11 @@ begin
   if FMqtt = nil then
     Exit;
   Ts := Int64(DateTimeToUnix(Now, True)) * 1000;
-  Js := Format('{"ts":%d,"source":"visca","kind":%s,"viscaHex":%s}', [Ts, JsonQuote(Kind), JsonQuote(HexTrace)]);
+  if Trim(DecodeJsonObject) <> '' then
+    Js := Format('{"ts":%d,"source":"visca","kind":%s,"viscaHex":%s,"decode":%s}',
+      [Ts, JsonQuote(Kind), JsonQuote(HexTrace), DecodeJsonObject])
+  else
+    Js := Format('{"ts":%d,"source":"visca","kind":%s,"viscaHex":%s}', [Ts, JsonQuote(Kind), JsonQuote(HexTrace)]);
   FMqtt.PublishJson('device/' + DeviceSlug + '/telemetry', Js);
 end;
 
@@ -886,6 +941,7 @@ var
   Expected: Integer;
   CtrlJson: string;
   EncodedProbe: TBytes;
+  Dec: string;
 begin
   if Length(Frame) < 2 then
     Exit;
@@ -933,22 +989,32 @@ begin
       Exit;
     end;
     Kind := 'other';
+    Dec := '';
     if Length(Frame) >= 2 then
     begin
-      case Frame[1] of
-        $40:
-          Kind := 'ack';
-        $41..$45:
-          Kind := 'completion';
-        $60:
-          Kind := 'error';
+      if Frame[1] = $60 then
+        Kind := 'error'
+      else if (Frame[1] and $F0) = $40 then
+        Kind := 'ack'
+      else if (Frame[1] and $F0) = $50 then
+        Kind := 'completion'
       else
         Kind := 'data';
-      end;
     end;
     TryFinalizeInFlightFromReply(SerialBusIndex, DevIdx, Kind, HexStr);
-    PublishDeviceTelemetry(FDeviceConfiguration.ViscaDevices[DevIdx].Slug, Kind, HexStr);
-    FLastReplyJson[DevIdx] := Format('{"kind":%s,"viscaHex":%s}', [JsonQuote(Kind), JsonQuote(HexStr)]);
+    Dec := TryDeviceReplyDecodeJson(Frame, Kind);
+    if Dec <> '' then
+      FLastReplyJson[DevIdx] := Format('{"kind":%s,"viscaHex":%s,"decode":%s}', [JsonQuote(Kind), JsonQuote(HexStr), Dec])
+    else
+      FLastReplyJson[DevIdx] := Format('{"kind":%s,"viscaHex":%s}', [JsonQuote(Kind), JsonQuote(HexStr)]);
+    if Dec <> '' then
+      FLastBusDeviceReplyJson[SerialBusIndex] := Format('{"deviceSlug":%s,"kind":%s,"viscaHex":%s,"decode":%s}',
+        [JsonQuote(FDeviceConfiguration.ViscaDevices[DevIdx].Slug), JsonQuote(Kind), JsonQuote(HexStr), Dec])
+    else
+      FLastBusDeviceReplyJson[SerialBusIndex] := Format('{"deviceSlug":%s,"kind":%s,"viscaHex":%s}',
+        [JsonQuote(FDeviceConfiguration.ViscaDevices[DevIdx].Slug), JsonQuote(Kind), JsonQuote(HexStr)]);
+    PublishControllerBusSnapshot(SerialBusIndex);
+    PublishDeviceTelemetry(FDeviceConfiguration.ViscaDevices[DevIdx].Slug, Kind, HexStr, Dec);
     PublishDeviceStatusMerge(FDeviceConfiguration.ViscaDevices[DevIdx].Slug, DevIdx);
     Exit;
   end;

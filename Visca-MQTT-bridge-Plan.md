@@ -64,7 +64,7 @@ releases extend the same daemon rather than replacing it.
 
 * **v0.3.2** — *Coalescing and device state cache* — **Implemented:** **`scheduler.coalesce`** queue drops, **last-wire redundant skip** + **`commandAck`**, **`state`** on **`device/<slug>/status`** (bridge + controller updates; inquiry-rich fields → **v0.3.3**). See **ROADMAP.md** / **CHANGELOG.md**.
 
-* **v0.3.3** — *Semantic decode of camera replies* — inquiries, errors, and state beyond ACK / raw **hex** on telemetry. Tracked in **ROADMAP.md**.
+* **v0.3.3** — *Semantic decode of camera replies* — **Implemented:** **`decode`** on **`device/<slug>/telemetry`** / **`lastReply`**, generic ACK/completion/error/**data** parsing (`viscareplydecode`); **`controller/<bus>/status`** with **`lastController`** / **`lastDeviceReply`**. Model-specific inquiry tables remain future refinement. See **ROADMAP.md** / **CHANGELOG.md**.
 
 Sections in this document marked **Phase: v0.2** or **Phase: v0.3** describe deferred work and
 are kept here for design continuity; v0.1 implementers can ignore them.
@@ -338,7 +338,9 @@ device/<slug>/telemetry
 device/<slug>/commandAck
 ```
 
-`device/<slug>/status` (v0.3.2+): JSON includes **`lastController`**, **`lastReply`**, and optional **`state`** (`pan`, `tilt`, `zoom`, `preset` keys with last-known MQTT JSON payloads from the bridge or from decoded controller traffic).
+`device/<slug>/telemetry` (v0.3.3+): may include a **`decode`** object for device replies (generic VISCA: **replyClass**, **socket**, **payload** bytes, **code** for errors).
+
+`device/<slug>/status` (v0.3.2+): JSON includes **`lastController`**, **`lastReply`**, and optional **`state`** (`pan`, `tilt`, `zoom`, `preset` keys with last-known MQTT JSON payloads from the bridge or from decoded controller traffic). **`lastReply`** gains the same **`decode`** field as telemetry when available (v0.3.3).
 
 `device/<slug>/commandAck` (v0.3.1+): JSON result for each **bridge-originated** VISCA command (success after ACK/completion, failure on timeout / serial I/O / encode / VISCA error). Set `scheduler.ackTimeoutMs` to **0** to skip waiting for a VISCA reply (fire-and-forget; payload still reports `viscaKind` **immediate**). **v0.3.2:** when the encoded packet matches the last successful wire for that command path, **`viscaKind`**: **`skipped`** and **`reason`**: **`redundant`** (even when **`ok`**: true).
 
@@ -357,6 +359,8 @@ Suggested topics:
 controller/<bus>/event
 controller/<bus>/status
 ```
+
+The bridge publishes **`controller/<bus>/status`** (v0.3.3+) after each **`controller/<bus>/event`** and after device-side replies on that bus, with **`lastController`** and **`lastDeviceReply`** snapshots (JSON objects or `null`).
 
 Suggested payload for `controller/<bus>/event` (JSON):
 
@@ -793,7 +797,7 @@ committed; **`hambridge.lpr`** in `src/` is the program entry source.
 /LICENSE                       # GPL-3.0-or-later
 /Visca-MQTT-bridge-Plan.md     # this file (architecture + phased spec)
 /CHANGELOG.md                  # release notes (human-oriented)
-/ROADMAP.md                    # backlog and upcoming minor releases (v0.3.1, v0.3.2, …)
+/ROADMAP.md                    # backlog; shipped minors through v0.3.3
 /bridge.json.example
 /devices.json.example
 /packaging/README.md             # systemd, sysusers, tmpfiles, udev templates
@@ -815,6 +819,7 @@ committed; **`hambridge.lpr`** in `src/` is the program entry source.
   mainloop.pas                 # poll() over evdev fds + MQTT tick + VISCA router tick
   serialport.pas               # Linux serial TX (stty + fpOpen/fpWrite); v0.2+
   viscamapping.pas             # visca-mapping.json encode + controller-packet reverse decode (v0.3)
+  viscareplydecode.pas         # device reply → JSON decode fragment for telemetry/status (v0.3.3)
   commandrouter.pas            # MQTT device/# → queued VISCA TX per bus; coalesce + state + redundant skip (v0.3.2)
 ```
 

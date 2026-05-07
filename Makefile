@@ -28,7 +28,7 @@ FPCFLAGS += -k-L$(EVDEV_LDIR) -k-l:libevdev.so.2
 FPCFLAGS += -Fl/usr/lib64 -Fl/usr/lib/x86_64-linux-gnu -Fl/usr/lib/aarch64-linux-gnu -Fl/usr/lib/arm-linux-gnueabihf
 
 # Keep in sync with src/hambridge.lpr AppVersion and packaging/Redhat/hambridge.spec Version.
-RPM_VER := 0.3.2
+RPM_VER := 0.3.3
 RPM_TOPDIR := $(abspath build/rpmbuild)
 RPM_SPEC := packaging/Redhat/hambridge.spec
 
