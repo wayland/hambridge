@@ -5,6 +5,8 @@ Rules-Requires-Root: no
 Build-Depends: debhelper-compat (= 13),
  fakeroot,
  fpc,
+ fp-units-fcl,
+ fp-units-rtl,
  libevdev-dev,
  make,
  unzip,
@@ -15,7 +17,7 @@ Maintainer: Tim Nelson <wayland@wayland.id.au>
 # armhf Pi OS 32-bit, or amd64 Debian). Edit the next line if yours differs.
 
 Package: hambridge
-Architecture: arm64
+Architecture: any
 Depends: ${misc:Depends}, ${shlibs:Depends}, adduser
 Suggests: mosquitto
 Description: Hardware-MQTT Bridge (evdev and VISCA over MQTT)
