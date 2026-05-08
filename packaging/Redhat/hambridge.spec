@@ -87,7 +87,7 @@ install -Dpm0644 packaging/udev/70-hambridge-input.rules \
 
 %files
 %license LICENSE
-%doc README.md DEVELOPING.md Visca-MQTT-bridge-Plan.md bridge.json.example devices.json.example
+%doc README.md INSTALL.md DEVELOPING.md Specification.md ConfigurationGuide.md bridge.json.example devices.json.example
 
 %{_bindir}/hambridge
 

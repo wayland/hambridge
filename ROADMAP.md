@@ -1,6 +1,6 @@
 # HaMBridge roadmap
 
-This file lists **planned or deferred work** compared to [`Visca-MQTT-bridge-Plan.md`](Visca-MQTT-bridge-Plan.md) and the current codebase. **Shipped releases** are recorded in [`CHANGELOG.md`](CHANGELOG.md).
+This file lists **planned or deferred work** compared to [`Specification.md`](Specification.md) and the current codebase. **Shipped releases** are recorded in [`CHANGELOG.md`](CHANGELOG.md).
 
 ---
 

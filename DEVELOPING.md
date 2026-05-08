@@ -1,8 +1,8 @@
 # Developing HaMBridge (Hardware-MQTT Bridge)
 
 This document is for **building from source** and contributor-oriented setup. For what the
-project does and how to run a binary you already have, see [README.md](README.md). The full
-design is in [Visca-MQTT-bridge-Plan.md](Visca-MQTT-bridge-Plan.md). **Release notes:** [CHANGELOG.md](CHANGELOG.md).
+project does, see [README.md](README.md). Installation/deployment is in [INSTALL.md](INSTALL.md).
+The specification is in [Specification.md](Specification.md). **Release notes:** [CHANGELOG.md](CHANGELOG.md).
 **Backlog / upcoming minors:** [ROADMAP.md](ROADMAP.md).
 
 The product name is **HaMBridge**; the v0.1 build produces the `hambridge` binary.
@@ -63,9 +63,7 @@ invoked; `sha256sum` still validates the file before unzip.
 
 ## Source layout (v0.1)
 
-See **§5.1 Build & layout** in `Visca-MQTT-bridge-Plan.md` for the intended `src/` unit list and
-responsibilities (`config.pas`, `devicesconfig.pas`, `evdevreader.pas`, `libevdev_binding.pas`,
-`mainloop.pas`, `mqttpublisher.pas`, `logger.pas`, `hambridge.lpr`).
+See `Specification.md` for a high-level architecture and MQTT surface.
 
 ## Configuration (development copies)
 
@@ -102,6 +100,21 @@ only the `*.example` variants are tracked.
 
 For the expected **systemd** deployment, unprivileged user **`hambridge`**, and **udev** rules
 shipped as templates, follow [packaging/README.md](packaging/README.md).
+
+## Manual / interactive use
+
+If you run the binary as your own user (not via systemd), you still need access to the event
+nodes. Options:
+
+- Add your user to the **`input`** group (broad — readable access to many input devices):
+
+  ```bash
+  sudo usermod -aG input "$USER"
+  # log out and back in for the new group to take effect
+  ```
+
+- Or use the same **udev** approach as production: a rule scoped to your device, with
+  `GROUP=` set to a group your user belongs to.
 
 ## Input device permissions
 
