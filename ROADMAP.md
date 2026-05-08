@@ -47,6 +47,29 @@ This file lists **planned or deferred work** compared to [`Specification.md`](Sp
 
 ---
 
+## v0.3.4 — TLS configuration (optional)
+
+**Intent:** implement full MQTT TLS configuration while keeping TLS **optional**.
+
+### v0.3.4 checklist
+
+- [ ] **Full TLS material** — CA bundle, client cert/key, and peer verification controls (beyond `tls: true` + OS default trust).
+- [ ] **Operational docs** — document common TLS deployment patterns and failure modes.
+
+---
+
+## v0.3.5 — VISCA over UDP
+
+**Intent:** add VISCA over UDP transport so HaMBridge can talk to devices that expose VISCA over IP (e.g. as supported by Bitfocus Companion’s Sony VISCA connection: `https://bitfocus.io/connections/sony-visca`).
+
+### v0.3.5 checklist
+
+- [ ] **UDP transport** — send/receive VISCA frames over UDP (socket lifecycle, timeouts, and retry semantics).
+- [ ] **`devices.json` support** — allow selecting UDP endpoints per device (host/port) alongside serial buses.
+- [ ] **Telemetry/status parity** — keep `device/<slug>/telemetry`, `device/<slug>/status`, and `device/<slug>/commandAck` semantics consistent across serial vs UDP transports.
+
+---
+
 ## Command router & scheduler (plan §3.2)
 
 - [ ] **Rate limiting / backpressure** — Beyond fixed **max queue depth** and **inter-command gap**; no explicit RS-485 saturation policy as described in the plan.
@@ -66,7 +89,7 @@ ACK / completion timing and **`scheduler.ackTimeoutMs`** are tracked under **v0.
 ## MQTT & `bridge.json` (plan §3.0–3.1, §7)
 
 - [ ] **`log.format`: `json`** — Still reserved; operational logging is effectively **text** only.
-- [ ] **Full TLS configuration** — CA bundle, client cert/key, `verifyPeer`, etc.; beyond **`tls: true`** + OS default trust.
+- [ ] **Full TLS configuration** — tracked under **v0.3.4** above.
 - [ ] **Broader QoS usage** — Generic `PublishJson` uses **QoS 0** for evdev / VISCA-side publishes; not a full “QoS 0 and 1 everywhere” productization.
 
 MQTT acknowledgements for **bridge-originated VISCA** are tracked under **v0.3.1** above.

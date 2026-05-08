@@ -621,6 +621,63 @@ Publishing MQTT to **`device/camera_stage/preset/call`** with payload **`{"prese
 * Handle RS-485 direction control if required
 * (Optional) Listen/sniff traffic from an RS-485 VISCA controller for VISCA-over-MQTT tunneling
 
+### VISCA over IP (UDP)
+
+In addition to serial buses, HaMBridge can support VISCA transported over IP using **UDP**
+(“VISCA over IP”). This transport exists for two related use cases:
+
+1. **Controller ingest / protocol translation (primary)**: receive VISCA frames from a network
+   controller and publish MQTT-friendly JSON events on `controller/<bus-slug>/event` (and snapshots
+   on `controller/<bus-slug>/status`), so downstream tooling can transform/reroute to `device/<slug>/...`.
+2. **Device control (optional extension)**: send VISCA commands to devices that accept VISCA/UDP,
+   keeping MQTT control and acknowledgement semantics consistent with serial.
+
+#### Configuration (`devices.json`)
+
+VISCA/UDP is configured as a **bus-like endpoint** with its own identifier (the MQTT **bus-slug**).
+One concrete way to represent this is to allow `buses.<bus-slug>` to be either:
+
+- a **serial bus** (existing fields: `port`, `baud`, etc.), or
+- a **udp bus**, with fields such as:
+  - `transport`: `"udp"`
+  - `bindHost`: IP to bind to (default `"0.0.0.0"`)
+  - `bindPort`: UDP port to listen on
+  - optional `allowFrom`: list of allowed source IPs/CIDRs (defence-in-depth)
+
+Each VISCA device still references `bus: "<bus-slug>"`. For VISCA/UDP device control, the device
+row also needs an endpoint to send to (e.g. `udpHost` / `udpPort`), or the bus defines a default
+remote endpoint and the device can override it.
+
+#### Frame handling (receive)
+
+When a UDP datagram is received on a VISCA/UDP bus:
+
+- The payload is treated as one or more VISCA frames (VISCA frames are terminated by `0xFF`).
+- Each extracted frame is passed through the same “VISCA sniff / decode” path as serial RX.
+  - If it matches a known controller-originated command, publish `controller/<bus-slug>/event`
+    with semantic JSON (`command`, `deviceSlug` when resolvable, `payload`, `trace.viscaHex`).
+  - If it cannot be mapped, publish a raw controller event (`command: "event"`, `payload.raw: true`)
+    with `trace.viscaHex`.
+
+The intent is that a network controller (e.g. software that emits VISCA/UDP) can be used as a
+source of controller events, and HaMBridge turns those into MQTT events for automation.
+
+#### Frame handling (send / optional)
+
+For VISCA/UDP device control, the bridge sends encoded VISCA frames (from MQTT control topics)
+as UDP datagrams to the configured endpoint. The scheduler/ACK discipline should behave as
+consistently as practical with serial:
+
+- `device/<slug>/commandAck` remains the authoritative “bridge-originated command lifecycle” result.
+- `device/<slug>/telemetry` / `device/<slug>/status` should remain transport-agnostic (serial vs UDP).
+
+#### Topics and compatibility
+
+Transport changes should not force topic changes:
+
+- Controller-side publishes remain `controller/<bus-slug>/event` and `controller/<bus-slug>/status`.
+- Device control remains `device/<slug>/<command>` regardless of serial vs UDP.
+
 ### Requirements
 
 * Non-blocking or timeout-based reads
