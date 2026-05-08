@@ -1,7 +1,7 @@
 # 📡 MQTT ↔ VISCA Bridge (Object Pascal / Free Pascal)
 
 **Product name:** **HaMBridge** (Hardware-MQTT Bridge) — a headless Linux daemon; this repository
-and plan focus on MQTT, Linux input (evdev), and VISCA/serial as phases land.
+and specification focus on MQTT, Linux input (evdev), and VISCA/serial.
 
 ## 1. Purpose
 
@@ -28,46 +28,18 @@ This project implements a **bidirectional bridge between MQTT and Sony VISCA cam
 
 ---
 
-## Roadmap / Phased scope
+## Implementation status (high level)
 
-The bridge is being built in three releases. Each release is a usable end-to-end slice; later
-releases extend the same daemon rather than replacing it.
+This specification is **versionless**. Versioned planning and release tracking live in:
 
-* **v0.1 — evdev → MQTT**
-  * Reads kernel input events from configured `/dev/input/event*` nodes via **libevdev**.
-  * Publishes each event as JSON to MQTT (see §3.1.2).
-  * No VISCA, no serial, no `device/<slug>/...` control topics, no state cache.
-  * Linux only.
-  * Out-of-process integrations (e.g. Node-RED) are responsible for translating evdev events
-    into VISCA-side actions if any are wanted at this stage.
+- `ROADMAP.md` (planned / deferred work)
+- `CHANGELOG.md` (shipped changes)
 
-* **v0.2 — MQTT → VISCA**
-  * Adds the serial layer (§3.4), VISCA encoder (§3.3), and command router (§3.2).
-  * Subscribes to `device/<slug>/<command>` and drives a single bus / single device first.
-  * Loads `visca-mapping.json` (§3.3) for per-model topic → byte mappings.
-  * No automatic state polling yet; ACK/error reply topics introduced.
+At a high level, HaMBridge supports:
 
-* **v0.2.1 — VISCA mapping + MQTT JSON**
-  * **Framed encoding** in `visca-mapping.json`: the bridge emits **`[device]` + `bytes` + template slots + `FF`**, where **`[device]`** is **`0x80 + viscaAddress`** (from each VISCA device’s **`viscaAddress`** in `devices.json`, 1..7) and **`FF`** is the VISCA terminator (not stored per topic).
-  * **`bytes`** holds the fixed middle of the command when present (typically starting with controller **`01`**, then category / command bytes — see §3.3). It may be **omitted or empty** only when a non-empty **`template`** supplies every byte between **`[device]`** and **`FF`**.
-  * **`template`** / **`variables`** may be **omitted** when the command is fully described by **`bytes`** alone (fixed middle between device byte and **`FF`**).
-  * **`template`** is a JSON array of **slot names**; each slot becomes **one byte** on the wire. Values come from the **MQTT JSON payload** (key = slot name, case-insensitive), then fall back to **`variables`** defaults in the mapping.
-  * **Raspberry Pi OS / Debian armhf & aarch64**: the root `Makefile` discovers `libevdev.so.2` under multiarch paths; see **`packaging/raspbian/README.md`** and **`make raspbian-help`**.
-
-* **v0.3 — VISCA → MQTT** *(implemented in tree: serial RX, reverse-map controller frames via visca-mapping,
-  device replies → telemetry; per-device `lastController` / `lastReply` on `device/<slug>/status`.)*
-  * Adds inbound VISCA decoding (RS-485 sniffing of controllers, device responses).
-  * Publishes `controller/<bus>/event` semantic JSON (§3.1.1).
-  * Adds `device/<slug>/status` / `device/<slug>/telemetry` for last-known snippets; **`device/<slug>/status`** also carries a **`state`** object (pan / tilt / zoom / preset last JSON) from **v0.3.2** — see §3.5.
-
-* **v0.3.1** — *Real-bus discipline and transport hardening* — **Implemented:** ACK / completion wait (`ackTimeoutMs`), **retry** (`commandRetryMax`, `retryBackoffMs`), **buffered serial writes**, **multi-byte** mapping template slots, serial **reopen**, MQTT **`device/<slug>/commandAck`**, optional per-bus **RS-485 `TIOCSRS485`**. **Nibble** slot encodings remain later. See **ROADMAP.md** / **CHANGELOG.md**.
-
-* **v0.3.2** — *Coalescing and device state cache* — **Implemented:** **`scheduler.coalesce`** queue drops, **last-wire redundant skip** + **`commandAck`**, **`state`** on **`device/<slug>/status`** (bridge + controller updates; inquiry-rich fields → **v0.3.3**). See **ROADMAP.md** / **CHANGELOG.md**.
-
-* **v0.3.3** — *Semantic decode of camera replies* — **Implemented:** **`decode`** on **`device/<slug>/telemetry`** / **`lastReply`**, generic ACK/completion/error/**data** parsing (`viscareplydecode`); **`controller/<bus>/status`** with **`lastController`** / **`lastDeviceReply`**. Model-specific inquiry tables remain future refinement. See **ROADMAP.md** / **CHANGELOG.md**.
-
-Sections in this document marked **Phase: v0.2** or **Phase: v0.3** describe deferred work and
-are kept here for design continuity; v0.1 implementers can ignore them.
+- **evdev → MQTT**: publish kernel input events as JSON
+- **MQTT → VISCA**: subscribe to `device/<slug>/<command>` and send VISCA over serial
+- **VISCA → MQTT**: decode controller traffic (`controller/<bus-slug>/...`) and device replies (`device/<slug>/...`)
 
 ---
 
@@ -131,13 +103,13 @@ talks to (buses, devices, evdev inputs).
 
 Notes:
 
-* `tls`: bool for v0.1; full TLS material (CA, cert, key, verifyPeer) is deferred — when `true`
-  in v0.1, default OS trust is used.
+* `tls`: boolean for now; full TLS material (CA, cert, key, verifyPeer) is deferred — when `true`,
+  default OS trust is used.
 * `clientId`: must be unique per broker; recommend suffixing with hostname or a random tail when
   running multiple bridges against one broker.
 * `lwt` / `birth`: emit on connect/disconnect so subscribers can detect bridge availability.
 * `log.level`: one of `debug` / `info` / `warn` / `error`.
-* `log.format`: `text` for v0.1; `json` reserved for later.
+* `log.format`: `text` for now; `json` reserved for later.
 
 ### Environment-variable overrides
 
@@ -253,7 +225,13 @@ Example shape (illustrative):
 }
 ```
 
-Per-device **`scheduler`** (VISCA): **`minInterCommandMs`**, **`maxQueueDepth`**, **`ackTimeoutMs`**, **`commandRetryMax`**, **`retryBackoffMs`** (see v0.3.1). **`coalesce`** (v0.3.2) is an array of **first path segments** (e.g. `pan` matches `pan` and `pan/…` topics): before enqueueing a new command, the bridge drops older **queued** commands for the same device and segment (the command currently waiting for ACK is never removed this way).
+Per-device **`scheduler`** (VISCA): **`minInterCommandMs`**,
+**`maxQueueDepth`**, **`ackTimeoutMs`**, **`commandRetryMax`**,
+**`retryBackoffMs`**. **`coalesce`** is an array of
+**first path segments** (e.g. `pan` matches `pan` and `pan/…` topics): before 
+enqueueing a new command, the bridge drops older **queued** commands for the 
+same device and segment (the command currently waiting for ACK is never removed 
+this way).  
 
 `evdev` block (when `enabled` is true):
 
@@ -267,14 +245,12 @@ Per-device **`scheduler`** (VISCA): **`minInterCommandMs`**, **`maxQueueDepth`**
 * **`slug`**: stable MQTT segment for this input (letters, digits, `_`, `-`); used in default topics and emitted as **`inputSlug`** in JSON (§3.1.2).
 * **`mqttTopic`**: topic for that input's event stream. If omitted, the default is
   `evdev/<slug>/event`.
-* **Implementation**: v0.1 uses the **`libevdev`** C library (linked as `-l:libevdev.so.2`) via a small
+* **Implementation**: HaMBridge uses the **`libevdev`** C library (linked as `-l:libevdev.so.2`) via a small
   Pascal binding unit. Raw `ioctl`/`read` is reserved for a possible later alternative; either
   way the MQTT contract above does not change.
 
 
 ## 3.1.1 VISCA Commands in MQTT
-
-*Phase: v0.2 (control topics) and v0.3 (semantic controller events).*
 
 Define a canonical set of **VISCA commands** for the MQTT representation. These commands appear
 in two places:
@@ -338,11 +314,11 @@ device/<slug>/telemetry
 device/<slug>/commandAck
 ```
 
-`device/<slug>/telemetry` (v0.3.3+): may include a **`decode`** object for device replies (generic VISCA: **replyClass**, **socket**, **payload** bytes, **code** for errors).
+`device/<slug>/telemetry`: may include a **`decode`** object for device replies (generic VISCA: **replyClass**, **socket**, **payload** bytes, **code** for errors).
 
-`device/<slug>/status` (v0.3.2+): JSON includes **`lastController`**, **`lastReply`**, and optional **`state`** (`pan`, `tilt`, `zoom`, `preset` keys with last-known MQTT JSON payloads from the bridge or from decoded controller traffic). **`lastReply`** gains the same **`decode`** field as telemetry when available (v0.3.3).
+`device/<slug>/status`: JSON includes **`lastController`**, **`lastReply`**, and optional **`state`** (`pan`, `tilt`, `zoom`, `preset` keys with last-known MQTT JSON payloads from the bridge or from decoded controller traffic). **`lastReply`** may include the same **`decode`** field as telemetry when available.
 
-`device/<slug>/commandAck` (v0.3.1+): JSON result for each **bridge-originated** VISCA command (success after ACK/completion, failure on timeout / serial I/O / encode / VISCA error). Set `scheduler.ackTimeoutMs` to **0** to skip waiting for a VISCA reply (fire-and-forget; payload still reports `viscaKind` **immediate**). **v0.3.2:** when the encoded packet matches the last successful wire for that command path, **`viscaKind`**: **`skipped`** and **`reason`**: **`redundant`** (even when **`ok`**: true).
+`device/<slug>/commandAck`: JSON result for each **bridge-originated** VISCA command (success after ACK/completion, failure on timeout / serial I/O / encode / VISCA error). Set `scheduler.ackTimeoutMs` to **0** to skip waiting for a VISCA reply (fire-and-forget; payload still reports `viscaKind` **immediate**). When the encoded packet matches the last successful wire for that command path, the bridge may skip TX and publish `viscaKind: skipped` with `reason: redundant`.
 
 #### VISCA-controller → MQTT (semantic JSON events)
 
@@ -356,13 +332,13 @@ JSON that intermediaries can inspect/transform/reroute.
 Suggested topics:
 
 ```
-controller/<bus>/event
-controller/<bus>/status
+controller/<bus-slug>/event
+controller/<bus-slug>/status
 ```
 
-The bridge publishes **`controller/<bus>/status`** (v0.3.3+) after each **`controller/<bus>/event`** and after device-side replies on that bus, with **`lastController`** and **`lastDeviceReply`** snapshots (JSON objects or `null`).
+The bridge publishes **`controller/<bus-slug>/status`** after each **`controller/<bus-slug>/event`** and after device-side replies on that bus, with **`lastController`** and **`lastDeviceReply`** snapshots (JSON objects or `null`).
 
-Suggested payload for `controller/<bus>/event` (JSON):
+Suggested payload for `controller/<bus-slug>/event` (JSON):
 
 ```json
 {
@@ -401,14 +377,12 @@ For example, a controller-derived "pan left" event could be represented as:
 
 ## 3.1.2 Evdev Events in MQTT
 
-*Phase: v0.1 (this is the entire v0.1 surface besides MQTT and config).*
-
 **Linux-only** capability: open configured **`/dev/input/event*`** nodes via **`libevdev`**
 (linked as `-levdev`, see §6), read kernel **input events** (`struct input_event`: `type`,
 `code`, `value`, time), and **publish each event as JSON to MQTT**.
 
 Raw `read()`/`ioctl()` on the character device is a possible future alternative implementation
-but is **not** an option for v0.1.
+but is not currently implemented.
 
 The bridge performs **no** translation from evdev into VISCA packets or into the canonical
 `device/<slug>/<command>` control model (§3.1.1). **Node-RED**, rules engines, or other subscribers
@@ -445,30 +419,30 @@ libevdev cannot resolve them (rare), those fields are emitted as `null`. Example
 ```
 
 * `ts` is milliseconds since Unix epoch from the bridge clock; the kernel `input_event.time` is
-  not surfaced separately in v0.1 (can be added later).
+  not surfaced separately (can be added later).
 * `value` follows kernel convention: for `EV_KEY` it is `0` release, `1` press, `2` repeat;
   for `EV_REL` / `EV_ABS` it is the axis value; for `EV_SYN` it is the sync subtype.
 
 ### Filtering policy
 
-v0.1 publishes **every event the kernel delivers**, including:
+The bridge publishes **every event the kernel delivers**, including:
 
 * `EV_SYN` markers (so subscribers can detect input frames if they care)
 * Auto-repeat key events (`value == 2`)
 * All axis updates from `EV_REL` / `EV_ABS`
 
 Subscribers are responsible for any filtering. Future versions may grow optional per-input filter
-rules; v0.1 keeps the wire format faithful to the kernel.
+rules; for now the wire format stays faithful to the kernel.
 
 ### MQTT QoS and retain
 
 Evdev publishes use **QoS 0** by default and **`retain = false`** (events are point-in-time;
-retaining them would mislead late subscribers). These defaults are not configurable in v0.1.
+retaining them would mislead late subscribers). These defaults are not configurable for now.
 
 ### Relationship to §3.1.1
 
 Evdev streams are **separate** from **VISCA-controller semantic events** on
-`controller/<bus>/event`. The latter remain decoded VISCA → JSON; evdev topics carry **raw input
+`controller/<bus-slug>/event`. The latter remain decoded VISCA → JSON; evdev topics carry **raw input
 events** only.
 
 ### Implementation notes
@@ -489,8 +463,6 @@ events** only.
 ---
 
 ## 3.2 Command Router
-
-*Phase: v0.2 (initial MQTT → VISCA dispatch); extended in v0.3 to publish decoded VISCA events.*
 
 ### Responsibilities
 
@@ -546,8 +518,6 @@ type
 
 ## 3.3 VISCA Protocol Layer
 
-*Phase: v0.2 (JSON **`visca-mapping.json`** encoder with per-model entries); response decode extended in v0.3.*
-
 ### Responsibilities
 
 * Encode commands into VISCA packets
@@ -593,9 +563,9 @@ The mapping file must support:
 
 * **Per-model selection**: e.g. `"model": "marshall-cv344"` assigned per `device/<slug>`
 * **Topic → VISCA frame(s)**: static byte sequences (hex) and/or **framed** rules (fixed middle + template slots)
-* **Optional parameters**: MQTT JSON and `variables` defaults supply values per template slot. A slot is **one wire byte** when the template entry is a **string** name (v0.2.1), or **1..8 bytes** when the entry is an object with **`slot`** and **`width`** (v0.3.1); values are a big-endian integer or a JSON **array** of byte-sized numbers. **Nibble** and other exotic encodings remain a later extension.
+* **Optional parameters**: MQTT JSON and `variables` defaults supply values per template slot. A slot is **one wire byte** when the template entry is a **string** name, or **1..8 bytes** when the entry is an object with **`slot`** and **`width`**; values are a big-endian integer or a JSON **array** of byte-sized numbers. **Nibble** and other exotic encodings remain a later extension.
 
-#### Wire assembly (v0.2.1)
+#### Wire assembly
 
 For topics that define a **non-empty `template`** array:
 
@@ -643,8 +613,6 @@ Publishing MQTT to **`device/camera_stage/preset/call`** with payload **`{"prese
 
 ## 3.4 Serial Communication Layer (RS-485)
 
-*Phase: v0.2 (TX path); RX/sniff path in v0.3.*
-
 ### Responsibilities
 
 * Open serial port device
@@ -669,8 +637,6 @@ Publishing MQTT to **`device/camera_stage/preset/call`** with payload **`{"prese
 
 ## 3.5 State Manager
 
-*Phase: v0.3.2 (lightweight cache + MQTT `status.state`); richer inquiry-driven fields in **v0.3.3**.*
-
 ### Responsibilities
 
 * Maintain device state cache
@@ -693,8 +659,6 @@ Publishing MQTT to **`device/camera_stage/preset/call`** with payload **`{"prese
 
 ## MQTT → Device
 
-*Phase: v0.2.*
-
 1. MQTT message received
 2. JSON parsed into `TCameraCommand`
 3. Command routed to VISCA layer
@@ -706,8 +670,6 @@ Publishing MQTT to **`device/camera_stage/preset/call`** with payload **`{"prese
 
 ## Device → MQTT
 
-*Phase: v0.3.*
-
 1. VISCA response received via serial
 2. Parsed into internal state update
 3. Converted to JSON
@@ -716,8 +678,6 @@ Publishing MQTT to **`device/camera_stage/preset/call`** with payload **`{"prese
 ---
 
 ## Evdev → MQTT
-
-*Phase: v0.1.*
 
 1. libevdev delivers a `struct input_event` from a configured device node
 2. Reader builds a JSON record (`type`, `typeNum`, `code`, `codeNum`, `value`, `inputSlug`, `deviceNode`, `ts`)
@@ -777,27 +737,29 @@ type
   end;
 ```
 
-The class list above describes the **eventual** shape across all phases. v0.1 only needs the
-units listed in §5.1.
+The class list above describes the **eventual** shape. The implementation is split into units
+under `src/` (see repository layout below).
 
 ---
 
-## 5.1 Build & layout (v0.1)
+## 5.1 Build & layout
 
-v0.1 builds with **`fpc` + `make`**. Optional IDE project metadata (e.g. `.lpi`, `.lps`) is **not**
-committed; **`hambridge.lpr`** in `src/` is the program entry source.
+HaMBridge builds with **`fpc` + `make`**. Optional IDE project metadata (e.g. `.lpi`, `.lps`) is
+not committed; **`hambridge.lpr`** in `src/` is the program entry source.
 
 ### Repository layout
 
 ```
 /Makefile                      # also downloads prof7bit/fpc-mqtt-client (pinned zip + SHA256) into build/deps/
 /README.md
+/INSTALL.md
 /DEVELOPING.md
+/ConfigurationGuide.md
 /.gitignore
 /LICENSE                       # GPL-3.0-or-later
-/Visca-MQTT-bridge-Plan.md     # this file (architecture + phased spec)
+/Specification.md              # this file (architecture + spec)
 /CHANGELOG.md                  # release notes (human-oriented)
-/ROADMAP.md                    # backlog; shipped minors through v0.3.3
+/ROADMAP.md                    # backlog / planned work
 /bridge.json.example
 /devices.json.example
 /packaging/README.md             # systemd, sysusers, tmpfiles, udev templates
@@ -811,26 +773,25 @@ committed; **`hambridge.lpr`** in `src/` is the program entry source.
 /src/
   hambridge.lpr                # program entry point
   config.pas                   # bridge.json loader + env override
-  devicesconfig.pas            # devices.json loader (evdev block in v0.1)
+  devicesconfig.pas            # devices.json loader (buses/devices/evdev inputs)
   logger.pas                   # stdout text logger (info/warn/error/debug)
   libevdev_binding.pas         # cdecl externs for libevdev (linked via -l:libevdev.so.2)
   evdevreader.pas              # opens /dev/input/event*, polls, emits records
   mqttpublisher.pas            # wraps prof7bit/fpc-mqtt-client; LWT + birth + device/# subscribe
   mainloop.pas                 # poll() over evdev fds + MQTT tick + VISCA router tick
-  serialport.pas               # Linux serial TX (stty + fpOpen/fpWrite); v0.2+
-  viscamapping.pas             # visca-mapping.json encode + controller-packet reverse decode (v0.3)
-  viscareplydecode.pas         # device reply → JSON decode fragment for telemetry/status (v0.3.3)
-  commandrouter.pas            # MQTT device/# → queued VISCA TX per bus; coalesce + state + redundant skip (v0.3.2)
+  serialport.pas               # Linux serial TX (stty + fpOpen/fpWrite)
+  viscamapping.pas             # visca-mapping.json encode + controller-packet reverse decode
+  viscareplydecode.pas         # device reply → JSON decode fragment for telemetry/status
+  commandrouter.pas            # MQTT device/# → queued VISCA TX per bus; status/telemetry/events
 ```
 
-Unit responsibilities for v0.1:
+Unit responsibilities:
 
 * **`hambridge.lpr`** — argument parsing (`--config`, `--devices`, `--help`,
   `--version`), top-level wiring, signal handling (`SIGTERM` graceful shutdown).
 * **`config.pas`** — load `bridge.json`, apply `BRIDGE_*` env overrides, validate. Path
   discovery as in §3.0.
-* **`devicesconfig.pas`** — load `devices.json`. v0.1 only consumes the `evdev` block; bus and
-  device blocks are parsed but otherwise unused.
+* **`devicesconfig.pas`** — load `devices.json` (buses, devices, optional evdev inputs).
 * **`logger.pas`** — global logger, level-filtered, plain text to stdout. No external deps.
 * **`libevdev_binding.pas`** — minimal `cdecl; external name '<symbol>'` declarations (one
   quoted linker symbol per function, e.g. `libevdev_new`) for:
@@ -862,10 +823,10 @@ Unit responsibilities for v0.1:
 * **`make raspbian-help`** — prints install hints for **Raspberry Pi OS / Debian** native builds
   (`fpc`, FCL units, `libevdev-dev`, …). Full notes: **`packaging/raspbian/README.md`**.
 * **`make debian-deb`** — on **Debian / Raspberry Pi OS**, runs **`dpkg-buildpackage`** using
-  **`packaging/debian/`** (exposed as **`./debian`** via symlink); produces **`../hambridge_<ver>_<arch>.deb`**
-  (architecture in **`packaging/debian/control`** must match the build host). See **`packaging/raspbian/README.md`**.
-* **`make install`** *(optional, post-v0.1)* — install binary to `/usr/local/bin` and example
-  configs to `/etc/hambridge/`.
+  **`packaging/debian/`** (exposed as **`./debian`** via symlink); produces **`../hambridge_<ver>_<arch>.deb`**.
+  See **`packaging/raspbian/README.md`**.
+* **`make install`** *(optional)* — install binary to `/usr/local/bin` and example configs to
+  `/etc/hambridge/`.
 
 ### Example config files
 
@@ -888,32 +849,16 @@ Unit responsibilities for v0.1:
 
 # 6. Dependencies
 
-Dependencies are listed alongside the phase that introduces them. v0.1 has the smallest set.
+HaMBridge has a small dependency footprint:
 
-## v0.1 (required)
-
-* **MQTT client**: **`prof7bit/fpc-mqtt-client`** (preferred) — pure Pascal MQTT v5 client;
-  **not** committed in-tree: `make` downloads a **tag-pinned** zip, checks **SHA256**, unpacks
-  under `./build/deps/` (see `Makefile`).
-* **JSON**: `fpjson` + `jsonparser` (FCL, ships with FPC) — used to load `bridge.json` /
-  `devices.json` and to encode evdev event payloads.
-* **libevdev** (Linux only): the C library `libevdev`, linked at build time as `-l:libevdev.so.2`
-  (runtime SONAME; no unversioned `.so` symlink required). Distro packages: Debian/Ubuntu
-  `libevdev2`, Fedora `libevdev`, Arch `libevdev`. v0.1 calls this library via a small in-tree
-  Pascal binding (`src/libevdev_binding.pas`); there is no separate Pascal package dependency.
-  Optional `-dev` / `-devel` packages are only needed when editing the binding against C headers.
+* **MQTT client**: **`prof7bit/fpc-mqtt-client`** (preferred) — pure Pascal MQTT client; not
+  committed in-tree. `make` downloads a tag-pinned zip, checks **SHA256**, and unpacks under
+  `./build/deps/` (see `Makefile`).
+* **JSON**: `fpjson` + `jsonparser` (FCL, ships with FPC).
 * **Free Pascal Compiler**: 3.2.x or newer.
-
-## v0.2 (added)
-
-* **Serial**: Linux **`stty`** + **`fpOpen`/`fpWrite`** on a raw TTY (see `src/serialport.pas`).
-  *Note:* the plan previously mentioned Synapse `synaser` as an option; the implemented v0.2
-  path uses POSIX I/O without that dependency.
-
-## v0.3 (added)
-
-* No new third-party dependencies expected; reuses the v0.2 serial layer for RS-485 RX and the
-  existing JSON stack for `controller/<bus>/event` and status/telemetry payloads.
+* **libevdev** (Linux only): linked at build time as `-l:libevdev.so.2` (runtime SONAME; no
+  unversioned `.so` symlink required).
+* **Serial I/O** (Linux): uses POSIX I/O on a raw TTY (see `src/serialport.pas`).
 
 ## Notes
 
