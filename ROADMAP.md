@@ -47,26 +47,92 @@ This file lists **planned or deferred work** compared to [`Specification.md`](Sp
 
 ---
 
-## v0.3.4 — TLS configuration (optional)
+## v0.3.4 — Test suite
+
+Does Free Pascal have a testing suite?  If so, fill in some information here about using it
+
+## v0.4.0 - YAML Conversion
+
+-   Convert all config files from YAML to JSON, and adjust the code accordingly
+
+## v0.4.1 - Bus Enrichment
+
+In devices.yaml, fields for buses should be:
+- transport (eg. `udp` or `serial`)
+- `transport_configuration` stanza that configures the transport
+- `protocol` (just `visca` for now)
+- `protocol_config` (optional): protocol-specific options (if any).
+
+## v0.4.2 - Endpoints Setup
+
+- Change devices.json to endpoints.yaml
+- Add the following fields to "buses"
+  - transport (only serial supported for now, but will add UDP later)
+  - protocol (only "visca" supported for now, but will support evdev later)
+
+## v0.4.3 - Devices -> Endpoints
+
+- In endpoints.yaml, change the "devices" stanza to an "endpoints" stanza
+- Each endpoint should have a "match" stanza, which basically says "When an event matches these, then consider it to be this endpoint".  Fields should probably be "endpoint_type", "bus" and "deviceID", for example.  
+- endpoint_type: "controller" or "device"
+
+## v0.4.4 - evdev -> Endpoints
+
+- The "evdev" section of the config file should be rolled into the "endpoints" section, and each input should become a "controller" device.  
+- The match section should allow a "deviceNode" option, but there should be other ways of matching too.  
+
+## v0.4.5 - Visca controllers -> Endpoints
+
+Allow defining a visca controller on serial as well (in the config file)
+
+## v0.4.6 — VISCA over UDP
+
+**Intent:** add VISCA over UDP transport so HaMBridge can talk to devices that expose VISCA over IP (e.g. as supported by Bitfocus Companion’s Sony VISCA connection: `https://bitfocus.io/connections/sony-visca`).
+
+### Visca over UDP checklist
+
+- [ ] **UDP transport** — send/receive VISCA frames over UDP (socket lifecycle, timeouts, and retry semantics).
+- [ ] **`devices.json` support** — allow selecting UDP endpoints per device (host/port) alongside serial buses.
+- [ ] **Telemetry/status parity** — keep `device/<slug>/telemetry`, `device/<slug>/status`, and `device/<slug>/commandAck` semantics consistent across serial vs UDP transports.
+
+### Visca over UDP — Open questions
+
+**Addresses (UDP)**
+
+- [ ] **Single socket vs per-device ports** — Must every device share the bound `bindPort`, or do we support per-device listener ports?
+- [ ] **Reply routing** — When multiple devices share one UDP socket, how do replies map to the correct `device/<slug>` (VISCA address byte only, or IP+port correlation, or dedicated sockets)?
+- [ ] **NAT / asymmetric paths** — How do we behave when outbound and return paths differ (e.g. NAT, Docker bridge networks)?
+
+**Device control over UDP**
+
+- [ ] **ACK / completion over lossy UDP** — Same `ackTimeoutMs` / retry semantics as serial, or UDP-specific defaults (e.g. shorter timeouts, different retry cap)?
+- [ ] **Datagram boundaries vs command boundaries** — Confirm one VISCA frame per sent datagram always; any exception for large payloads?
+- [ ] **Half-duplex / collision** — Is there any scenario where the bridge must not send while expecting a reply on the same socket (shared medium semantics)?
+- [ ] **MTU / fragmentation** — Do we forbid IP fragmentation (stay under PMTU), or detect and log?
+
+
+## v0.5.0 — TLS configuration (optional)
 
 **Intent:** implement full MQTT TLS configuration while keeping TLS **optional**.
 
-### v0.3.4 checklist
+### TLS configuration - checklist
 
 - [ ] **Full TLS material** — CA bundle, client cert/key, and peer verification controls (beyond `tls: true` + OS default trust).
 - [ ] **Operational docs** — document common TLS deployment patterns and failure modes.
 
 ---
 
-## v0.3.5 — VISCA over UDP
+## v0.5.1 — Github Actions
 
-**Intent:** add VISCA over UDP transport so HaMBridge can talk to devices that expose VISCA over IP (e.g. as supported by Bitfocus Companion’s Sony VISCA connection: `https://bitfocus.io/connections/sony-visca`).
+Set up GitHub Actions that will do a release.  A release should consist of packages for a) Redhat and b) Raspbian
 
-### v0.3.5 checklist
+## v0.5.2 - Security scan
 
-- [ ] **UDP transport** — send/receive VISCA frames over UDP (socket lifecycle, timeouts, and retry semantics).
-- [ ] **`devices.json` support** — allow selecting UDP endpoints per device (host/port) alongside serial buses.
-- [ ] **Telemetry/status parity** — keep `device/<slug>/telemetry`, `device/<slug>/status`, and `device/<slug>/commandAck` semantics consistent across serial vs UDP transports.
+See if there's a skill for doing a security scan, then use that.  
+
+## v1.0.0 - Release!
+
+When the Github Release actions fully work, release v1.0.0
 
 ---
 

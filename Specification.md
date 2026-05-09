@@ -76,7 +76,18 @@ talks to (buses, devices, evdev inputs).
   "mqtt": {
     "host": "localhost",
     "port": 1883,
-    "tls": false,
+    "tls": {
+      "enabled": false,
+      "caFile": null,
+      "caPath": null,
+      "clientCertFile": null,
+      "clientKeyFile": null,
+      "verifyPeer": true,
+      "serverName": null,
+      "minVersion": null,
+      "maxVersion": null,
+      "ciphers": null
+    },
     "username": null,
     "password": null,
     "clientId": "hambridge",
@@ -103,13 +114,69 @@ talks to (buses, devices, evdev inputs).
 
 Notes:
 
-* `tls`: boolean for now; full TLS material (CA, cert, key, verifyPeer) is deferred — when `true`,
-  default OS trust is used.
 * `clientId`: must be unique per broker; recommend suffixing with hostname or a random tail when
   running multiple bridges against one broker.
 * `lwt` / `birth`: emit on connect/disconnect so subscribers can detect bridge availability.
 * `log.level`: one of `debug` / `info` / `warn` / `error`.
 * `log.format`: `text` for now; `json` reserved for later.
+
+
+
+### MQTT TLS Notes
+
+* **`mqtt.tls` shape:** Either a **boolean** shorthand (`false` = TLS off; `true` = TLS on with OS
+  default trust only, peer verification per implementation default) **or** an **object** as in the
+  example. When the object is used, **`enabled`** gates TLS; other fields apply only when
+  `enabled` is true. Implementations **should** accept a legacy boolean for backward compatibility
+  and map it to the object form (`enabled` = that boolean, other fields defaulted).
+* **`mqtt.tls.caFile`**: path to a PEM file containing one or more CA certificates (trust anchor for
+  verifying the broker). Mutually exclusive with using only `caPath` for a directory, unless the
+  implementation merges both; if both are set, behaviour must be defined (recommended: prefer
+  `caFile` when non-empty, else `caPath`).
+* **`mqtt.tls.caPath`**: path to a directory of hashed CA certs (OpenSSL-style `c_rehash` layout),
+  when used instead of or in addition to `caFile` (see implementation note above).
+* **`mqtt.tls.clientCertFile`** / **`mqtt.tls.clientKeyFile`**: optional client certificate and private
+  key (PEM) for mutual TLS.
+* **`mqtt.tls.verifyPeer`**: only meaningful when TLS is **enabled** (`mqtt.tls.enabled` true, or
+  legacy `mqtt.tls: true`). When TLS is **off**, **`verifyPeer` is ignored** (no peer to verify).
+  When TLS is on and **`verifyPeer`** is true, the broker certificate must validate against trust
+  anchors (custom CA / `caFile` / `caPath` and/or OS store per implementation). When TLS is on and
+  **`verifyPeer`** is false, insecure verification is allowed (discouraged in production; must be
+  obvious in logs at connect).
+* **`mqtt.tls.serverName`**: optional TLS Server Name Indication (SNI) / hostname used for
+  certificate verification when it differs from `mqtt.host` (e.g. IP in `host`, name in
+  `serverName`).
+* **`mqtt.tls.minVersion`** / **`mqtt.tls.maxVersion`**: optional TLS protocol bounds (string names
+  such as `TLSv1.2` / `TLSv1.3` — exact accepted tokens are implementation-defined but must be
+  documented in release notes).
+* **`mqtt.tls.ciphers`**: optional OpenSSL cipher list string; omit for implementation default.
+
+### MQTT TLS behavioural rules
+
+* **Startup / config:** Malformed JSON, unreadable `caFile` / `clientCertFile` / `clientKeyFile`, or
+  invalid combinations (e.g. client cert without key) should fail **at startup** with a clear
+  error and non-zero exit (fail closed).
+* **Runtime / broker:** TLS handshake or broker auth failures should be treated like other broker
+  errors: **log**, **disconnect**, **reconnect with backoff** (same class as TCP connect failure),
+  without dumping private key material or passwords into logs.
+* **Secrets:** Never log `mqtt.password`, private key contents, or client certificate PEM bodies.
+  Logging may include **paths** to cert files and **boolean** flags (e.g. `verifyPeer`).
+* **Trust:** When TLS **`enabled`** is true and **`verifyPeer`** is true with **no** `caFile`/`caPath`,
+  implementations use **OS default trust stores** only. When `caFile` or `caPath` is set, broker
+  verification must include those anchors (exact merge order is implementation-defined but must be
+  documented). When TLS **`enabled`** is false, **`verifyPeer` must not** be treated as a required
+  field (it does not apply).
+* **Certificate expiry:** implementations **may** warn at connect when the broker or client
+  certificate is within a configurable horizon of expiry (optional; document if supported).
+* **Insecure verification:** when TLS is enabled and **`verifyPeer`** is false, implementations
+  **should** emit a **high-visibility log** at connect (e.g. `warn` with a fixed message id), and
+  **may** require an additional explicit config flag to allow it in production builds (policy choice;
+  document which applies).
+* **Key file permissions:** if **`clientKeyFile`** is world-readable or group-readable beyond the
+  service user, implementations **should** log a **warning** or refuse startup (document which).
+* **Deployment:** Recommended layout for packaged installs is PEM files under
+  `/etc/hambridge/tls/` (or similar), readable only by the service user; `bridge.json` holds paths,
+  not inline secrets.
 
 ### Environment-variable overrides
 
@@ -124,6 +191,16 @@ Any field above can be overridden by an environment variable. The mapping is mec
   * `BRIDGE_MQTT_CLIENTID` → `mqtt.clientId`
   * `BRIDGE_MQTT_LWT_TOPIC` → `mqtt.lwt.topic`
   * `BRIDGE_LOG_LEVEL` → `log.level`
+  * `BRIDGE_MQTT_TLS_ENABLED` → `mqtt.tls.enabled` (when `mqtt.tls` is an object)
+  * `BRIDGE_MQTT_TLS_CAFILE` → `mqtt.tls.caFile`
+  * `BRIDGE_MQTT_TLS_CAPATH` → `mqtt.tls.caPath`
+  * `BRIDGE_MQTT_TLS_CLIENTCERTFILE` → `mqtt.tls.clientCertFile`
+  * `BRIDGE_MQTT_TLS_CLIENTKEYFILE` → `mqtt.tls.clientKeyFile`
+  * `BRIDGE_MQTT_TLS_VERIFYPEER` → `mqtt.tls.verifyPeer`
+  * `BRIDGE_MQTT_TLS_SERVERNAME` → `mqtt.tls.serverName`
+  * `BRIDGE_MQTT_TLS_MINVERSION` → `mqtt.tls.minVersion`
+  * `BRIDGE_MQTT_TLS_MAXVERSION` → `mqtt.tls.maxVersion`
+  * `BRIDGE_MQTT_TLS_CIPHERS` → `mqtt.tls.ciphers`
 
 Env vars **win** over the file. Booleans accept `true`/`false`/`1`/`0`; integers must parse as
 base-10. Empty string clears the field (treated as unset).
@@ -181,6 +258,7 @@ Example shape (illustrative):
 {
   "buses": {
     "rs485-1": {
+      "transport": "serial",
       "port": "/dev/ttyUSB0",
       "baud": 9600,
       "dataBits": 8,
@@ -193,6 +271,14 @@ Example shape (illustrative):
         "delayRtsBeforeSend": 0,
         "delayRtsAfterSend": 0
       }
+    },
+    "visca-udp-1": {
+      "transport": "udp",
+      "bindHost": "0.0.0.0",
+      "bindPort": 52381,
+      "allowFrom": ["192.0.2.0/24"],
+      "defaultUdpHost": null,
+      "defaultUdpPort": null
     }
   },
   "devices": [
@@ -232,6 +318,21 @@ Per-device **`scheduler`** (VISCA): **`minInterCommandMs`**,
 enqueueing a new command, the bridge drops older **queued** commands for the 
 same device and segment (the command currently waiting for ACK is never removed 
 this way).  
+
+**`buses` entries:** Each key is the **bus-slug** (string identifier used in MQTT topics such as
+`controller/<bus-slug>/event`). Every bus object **must** include **`transport`**: **`"serial"`** or
+**`"udp"`**. Serial buses use `port`, `baud`, etc.; UDP buses use `bindHost`, `bindPort`, and optional
+`allowFrom` / default remote fields as in §3.4.
+
+**VISCA logical bus vs wire addressing:** The Sony VISCA framing you use on a link does **not**
+define a separate global “bus ID” byte distinct from **device/peripheral address** (typically
+**1–7**, configured as **`viscaAddress`** per device). One physical medium — one serial port (**one
+`bus-slug`**) or one UDP bind (**one `bus-slug`**) — carries traffic for **multiple** devices that
+differ by **`viscaAddress`** only. So the mapping is:
+**`bus-slug` → one transport endpoint (TTY or UDP listener) → one shared VISCA medium**;
+**`viscaAddress` → which device on that medium**. (Some ecosystems use the words “bus” loosely; on
+the wire here, **per-medium** identity is the bridge **`bus-slug`**, and **per-device** identity on
+that medium is **`viscaAddress`**.)
 
 `evdev` block (when `enabled` is true):
 
@@ -624,59 +725,101 @@ Publishing MQTT to **`device/camera_stage/preset/call`** with payload **`{"prese
 ### VISCA over IP (UDP)
 
 In addition to serial buses, HaMBridge can support VISCA transported over IP using **UDP**
-(“VISCA over IP”). This transport exists for two related use cases:
+(“VISCA over IP”). This transport supports:
 
-1. **Controller ingest / protocol translation (primary)**: receive VISCA frames from a network
-   controller and publish MQTT-friendly JSON events on `controller/<bus-slug>/event` (and snapshots
-   on `controller/<bus-slug>/status`), so downstream tooling can transform/reroute to `device/<slug>/...`.
-2. **Device control (optional extension)**: send VISCA commands to devices that accept VISCA/UDP,
-   keeping MQTT control and acknowledgement semantics consistent with serial.
+1. **Controller ingest / protocol translation (primary):** receive VISCA frames from one or more
+   network controllers on the **same logical bus** and publish MQTT-friendly JSON on
+   `controller/<bus-slug>/event` (and snapshots on `controller/<bus-slug>/status`), so downstream
+   tooling can transform/reroute to `device/<slug>/...`.
+2. **Device control:** send VISCA commands to devices that accept VISCA/UDP, with MQTT
+   **`device/<slug>/commandAck`**, **`device/<slug>/telemetry`**, and **`device/<slug>/status`**
+   semantics aligned with serial where practical.
 
 #### Configuration (`devices.json`)
 
-VISCA/UDP is configured as a **bus-like endpoint** with its own identifier (the MQTT **bus-slug**).
-One concrete way to represent this is to allow `buses.<bus-slug>` to be either:
+Each entry under **`buses.<bus-slug>`** **must** set **`transport`** to **`"serial"`** or **`"udp"`**.
 
-- a **serial bus** (existing fields: `port`, `baud`, etc.), or
-- a **udp bus**, with fields such as:
-  - `transport`: `"udp"`
-  - `bindHost`: IP to bind to (default `"0.0.0.0"`)
-  - `bindPort`: UDP port to listen on
-  - optional `allowFrom`: list of allowed source IPs/CIDRs (defence-in-depth)
+**Serial (`transport`: `"serial"`):** existing fields (`port`, `baud`, optional `rs485`, …).
 
-Each VISCA device still references `bus: "<bus-slug>"`. For VISCA/UDP device control, the device
-row also needs an endpoint to send to (e.g. `udpHost` / `udpPort`), or the bus defines a default
-remote endpoint and the device can override it.
+**UDP (`transport`: `"udp"`):**
+
+* **`bindHost`:** local address to bind (default `"0.0.0.0"` for all interfaces; use `"127.0.0.1"` for
+  loopback-only if desired).
+* **`bindPort`:** UDP port the bridge listens on for ingress (required).
+* **`allowFrom`:** optional list of CIDR strings; if present, datagrams from other sources are dropped
+  without emitting MQTT (defence-in-depth).
+* **`defaultUdpHost`** / **`defaultUdpPort`:** optional default remote for **outbound** device control
+  when a device row does not specify `udpHost` / `udpPort`.
+
+**Bus identity:**
+
+* **`bus-slug`** (the object key under `buses`) identifies the **whole bus** for MQTT topics
+  (`controller/<bus-slug>/…`). **Multiple controllers** may send to the same UDP listener; all are
+  on the same logical bus. Distinguish sources using **`trace`** fields on published JSON (below).
+
+Each VISCA device references **`bus: "<bus-slug>"`**. For UDP device control, each device **must**
+have a resolvable remote endpoint: **`udpHost`** / **`udpPort`** on the device row, or bus-level
+**`defaultUdpHost`** / **`defaultUdpPort`**.
+
+#### Controller events: `trace` fields (UDP)
+
+For traffic received over UDP, `controller/<bus-slug>/event` payloads **should** include:
+
+* **`trace.transport`:** `"udp"`.
+* **`trace.remoteHost`:** source IP string.
+* **`trace.remotePort`:** source UDP port (integer).
+* **`trace.viscaHex`:** space-separated hex of the decoded frame (as for serial).
+
+#### Datagram-to-frame rules (Postel principle)
+
+**Sending (conservative):** The bridge **should** send **one complete VISCA frame per UDP datagram**,
+terminated by **`0xFF`**, with payload length within a reasonable upper bound (e.g. ≤ **1024** bytes;
+exact default is implementation-defined). No trailing bytes after `0xFF` in the datagram.
+
+**Receiving (liberal):**
+
+* A datagram may contain **one or more** complete VISCA frames, each ending with **`0xFF`**. Emit
+  one MQTT controller event (or processing step) per extracted frame in order.
+* **Trailing garbage** after a well-formed frame (bytes after `0xFF` before the next valid start) **may**
+  be ignored, or logged at debug; implementers must not treat arbitrary padding as a second frame
+  unless it parses as a new frame.
+* **Incomplete frame** (no `0xFF` within the datagram): **do not** merge across datagrams unless a
+  separate reassembly policy is explicitly implemented; the default is to **discard** the incomplete
+  tail for that datagram (or log once at `warn`). Cross-datagram framing is a known interoperability
+  hazard and is **out of scope** unless added later with explicit sequence rules.
+* **Oversized datagram:** drop or truncate per implementation policy; must be documented and must not
+  crash the process.
+
+These datagram rules are **recommended normative** behaviour for interoperability (“be conservative in
+what you send, liberal in what you accept”).
 
 #### Frame handling (receive)
 
 When a UDP datagram is received on a VISCA/UDP bus:
 
-- The payload is treated as one or more VISCA frames (VISCA frames are terminated by `0xFF`).
-- Each extracted frame is passed through the same “VISCA sniff / decode” path as serial RX.
-  - If it matches a known controller-originated command, publish `controller/<bus-slug>/event`
-    with semantic JSON (`command`, `deviceSlug` when resolvable, `payload`, `trace.viscaHex`).
-  - If it cannot be mapped, publish a raw controller event (`command: "event"`, `payload.raw: true`)
-    with `trace.viscaHex`.
+* Apply **`allowFrom`** if configured.
+* Extract zero or more VISCA frames per the rules above.
+* Pass each frame through the same “VISCA sniff / decode” path as serial RX.
+  * If it matches a known controller-originated command, publish `controller/<bus-slug>/event` with
+    semantic JSON (`command`, `deviceSlug` when resolvable, `payload`, **`trace`** as above).
+  * If it cannot be mapped, publish a raw controller event (`command: "event"`, `payload.raw: true`)
+    with **`trace.viscaHex`** and **`trace.remoteHost`** / **`trace.remotePort`**.
 
-The intent is that a network controller (e.g. software that emits VISCA/UDP) can be used as a
-source of controller events, and HaMBridge turns those into MQTT events for automation.
+#### Frame handling (send — device control over UDP)
 
-#### Frame handling (send / optional)
+For device control, the bridge sends encoded VISCA frames (from MQTT control topics) as UDP
+datagrams to the device’s **`udpHost`** / **`udpPort`**. Use the same conservative one-frame-per-datagram
+rule as in “Sending” above unless a documented exception applies.
 
-For VISCA/UDP device control, the bridge sends encoded VISCA frames (from MQTT control topics)
-as UDP datagrams to the configured endpoint. The scheduler/ACK discipline should behave as
-consistently as practical with serial:
-
-- `device/<slug>/commandAck` remains the authoritative “bridge-originated command lifecycle” result.
-- `device/<slug>/telemetry` / `device/<slug>/status` should remain transport-agnostic (serial vs UDP).
+* **`device/<slug>/commandAck`** remains the authoritative bridge-originated command lifecycle result.
+* **`device/<slug>/telemetry`** / **`device/<slug>/status`** remain transport-agnostic (serial vs UDP).
 
 #### Topics and compatibility
 
-Transport changes should not force topic changes:
+Transport changes do not change topic shapes:
 
-- Controller-side publishes remain `controller/<bus-slug>/event` and `controller/<bus-slug>/status`.
-- Device control remains `device/<slug>/<command>` regardless of serial vs UDP.
+* Controller-side publishes remain `controller/<bus-slug>/event` and `controller/<bus-slug>/status`.
+* Device control remains `device/<slug>/<command>` regardless of serial vs UDP.
 
 ### Requirements
 
