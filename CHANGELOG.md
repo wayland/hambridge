@@ -8,6 +8,12 @@ Notable changes to **HaMBridge** (this repository). Release history for packagin
 
 - **Bus schema enforcement** — `buses.<id>` requires `transport` + `protocol`, validates `protocol_config` (if present) is an object, and reads serial settings from `transport_configuration`.
 
+## [0.4.2] — 2026-05-09
+
+### Changed
+
+- **Endpoints loader** — VISCA devices are loaded from `endpoints[]` with `match.endpoint_type: device`, using `match.bus` and `match.deviceID` (replacing the legacy `devices[]` stanza). Evdev inputs are loaded as `match.endpoint_type: controller` with `match.protocol: evdev` and default publish topic `controller/<slug>/event`.
+
 ## [0.4.0] — 2026-05-09
 
 ### Changed

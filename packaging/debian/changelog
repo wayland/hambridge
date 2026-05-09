@@ -1,3 +1,10 @@
+hambridge (0.4.2-1) unstable; urgency=medium
+
+  * v0.4.2: endpoints config loader (endpoints[].match for VISCA devices and evdev controller endpoints);
+    update example config and documentation; v0.4.2 release metadata.
+
+ -- Tim Nelson <wayland@wayland.id.au>  Sat, 09 May 2026 10:00:00 +0000
+
 hambridge (0.4.1-1) unstable; urgency=medium
 
   * v0.4.1: buses schema enforcement (transport/protocol + transport_configuration; protocol_config

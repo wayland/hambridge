@@ -64,9 +64,13 @@ This file lists **planned or deferred work** compared to [`docs/developers/Speci
 
 ## v0.4.2 — Devices → Endpoints
 
-- In `hambridge.yaml`, change the "devices" stanza to an "endpoints" stanza
-- Each endpoint should have a "match" stanza, which basically says "When an event matches these, then consider it to be this endpoint".  Fields should probably be "endpoint_type", "bus" and "deviceID", for example.  
-- endpoint_type: "controller" or "device"
+**Shipped:** `hambridge.yaml` uses **`endpoints[]`** with a required **`match`** stanza. VISCA devices are
+**`match.endpoint_type: device`** and use **`match.bus`** + **`match.deviceID`** for routing.
+
+### Devices → Endpoints Checklist
+
+- [x] Replace `devices:` with `endpoints:` in config and loader.
+- [x] Parse `match.endpoint_type`, `match.bus`, and `match.deviceID` (1..7) for VISCA devices.
 
 ## v0.4.3 — Evdev → Endpoints
 
