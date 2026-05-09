@@ -37,9 +37,10 @@ This specification is **versionless**. Versioned planning and release tracking l
 
 At a high level, HaMBridge supports:
 
-- **evdev → MQTT**: publish kernel input events as JSON
+- **evdev → MQTT**: publish kernel input events as JSON on **`controller/<slug>/event`** (**`endpoints`**
+  **`controller`** / **`match.protocol: evdev`**, §3.1.2)
 - **MQTT → VISCA**: subscribe to `device/<slug>/<command>` and send VISCA over serial
-- **VISCA → MQTT**: decode controller traffic (`controller/<bus-slug>/...`) and device replies (`device/<slug>/...`)
+- **VISCA → MQTT**: decode controller traffic (`controller/<slug>/...`) and device replies (`device/<slug>/...`)
 
 ---
 
@@ -72,8 +73,9 @@ Normative configuration is a **single UTF-8 YAML document**. Top-level keys incl
   string path to the VISCA topic→bytes file (YAML; see §3.3). Other keys may be reserved later;
   unknown keys under **`device_mappings`** are ignored (§3.0.3).
 * **`buses`** — object keyed by **bus-slug**; each value is a bus entry (§3.1).
-* **`devices`** — sequence (array) of VISCA device records (**`slug`**, **`model`**, **`bus`**, …).
-* **`evdev`** — optional block for Linux input → MQTT (§3.1.2).
+* **`endpoints`** — sequence (array) of **endpoint** records (§3.1): each has a **`slug`**, a **`match`**
+  stanza, and type-specific fields (e.g. VISCA **`device`** endpoints use **`model`**, optional **`scheduler`**;
+  Linux input is configured as **`endpoint_type: controller`** with **`match.protocol: evdev`** — §3.1.2).
 
 On disk, configuration is **YAML** only: **`hambridge.yaml`** plus the VISCA mapping file named by
 **`device_mappings.visca`**.
@@ -101,8 +103,8 @@ reasonable choice; which library ships in a given build **must** be documented i
 
 ### 3.0.3 Unknown keys and `protocol_config`
 
-Throughout the YAML document (root, **`bridge`**, **`device_mappings`**, **`buses`**, device rows,
-**`evdev`**, bus entries, and other objects defined in this spec): **unknown keys are ignored** (no
+Throughout the YAML document (root, **`bridge`**, **`device_mappings`**, **`buses`**, endpoint rows,
+bus entries, and other objects defined in this spec): **unknown keys are ignored** (no
 parse failure) so forward-compatible files load on older daemons.
 
 For **`protocol_config`** (optional, per bus): keys that are **irrelevant** to the selected
@@ -265,7 +267,7 @@ file wins:
 There is **no** fallback that searches **`./config/`** or the current directory by name: a checkout or
 any non-standard layout **must** use step **1** or **2**. **`docs/user/ConfigurationGuide.md`** describes this for operators.
 
-**`bridge`**, **`device_mappings`**, **`buses`**, **`devices`**, and **`evdev`** are **siblings**
+**`bridge`**, **`device_mappings`**, **`buses`**, and **`endpoints`** are **siblings**
 at the document root (same file as **`hambridge.yaml`**). A second on-disk file is required only for
 the VISCA mapping document referenced by **`device_mappings.visca`**.
 
@@ -279,8 +281,8 @@ If no configuration file is found, the bridge logs a clear error and exits non-z
 
 * Connect to MQTT broker (TCP/IP)
 * Subscribe to control topics
-* Publish status, acknowledgements, controller-originated events, and (optional) **raw evdev** event
-  streams (§3.1.2)
+* Publish status, acknowledgements, controller-originated events (including **Linux evdev** as
+  **`controller/<slug>/…`** — §3.1.2)
 * Handle reconnection automatically
 
 ### Requirements
@@ -296,29 +298,85 @@ Alongside **`bridge`**, the process config file defines:
 
 * **`device_mappings.visca`**: path to the VISCA topic mapping YAML (see §3.3)
 * **`buses`**: which buses exist (transport, wire-level settings, protocol)
-* **`devices`**: sequence of VISCA devices (**`slug`** for `device/<slug>/...`, **`viscaAddress`**
-  1..7 on the VISCA bus, **`model`**, **`bus`**, optional **`scheduler`**)
-* optional per-device scheduler overrides (timing, queue bounds, coalescing rules)
-* **`evdev`**: optional Linux inputs—kernel nodes to open and MQTT topic per stream (§3.1.2); the
-  bridge emits **raw evdev-style events** only—no translation to VISCA or `device/<slug>/...`
-  commands in-process
+* **`endpoints`**: sequence of endpoints; each has a **`slug`** and **`match`** (**`endpoint_type`**
+  **`device`** vs **`controller`**, wire **`bus`**, and for controllers **`match.protocol`**: **`evdev`**
+  or **`visca`**). See **Normative endpoints schema** below.
 
 #### Normative bus entry schema (v0.4.1+)
 
 Each value under **`buses.<bus-slug>`** is a mapping with:
 
-* **`transport`** (required): wire transport identifier, e.g. **`serial`** or **`udp`**.
+* **`transport`** (required): wire transport identifier. For **`protocol: visca`**, **`serial`** or
+  **`udp`** as in §3.4. For **`protocol: evdev`** (Linux input bus; v0.4.3+), **`transport`** **must**
+  be **`none`** and **`transport_configuration`** **must** be **`{}`** (no TTY or UDP socket).
 * **`transport_configuration`** (required): mapping whose **keys depend on `transport`** (serial
-  vs UDP field sets are defined in §3.4). All port/baud/RS-485 and UDP bind/ACL/default-remote
-  fields live **here**, not alongside `transport` at the top level of the bus object.
-* **`protocol`** (required): logical protocol on that wire, e.g. **`visca`**.
-* **`protocol_config`** (optional): mapping for protocol-specific options. Keys that do not apply
-  to the selected **`protocol`** / **`transport`** are **ignored** (see §3.0.3).
+  vs UDP field sets are defined in §3.4). For **`transport: none`**, use an **empty** mapping **`{}`**.
+* **`protocol`** (required): logical protocol on that bus: **`visca`** (VISCA on serial/UDP) or
+  **`evdev`** (logical grouping for Linux input **controller** endpoints).
+* **`protocol_config`** (optional): protocol-specific options. For **`protocol: evdev`**, **`enabled`**
+  (boolean) **must** be present: when **`false`**, no endpoint may reference this **`bus-slug`** in
+  **`match.bus`**. Other keys are **ignored** if irrelevant (§3.0.3).
 
-**`buses` object keys** are **bus-slugs** (MQTT segments such as `controller/<bus-slug>/event`).
+**`buses` object keys** are **bus-slugs**: they identify the **shared wire or logical medium** for
+**`match.bus`** on **device** and **controller** endpoints (e.g. VISCA medium, or the **`evdev`**
+logical bus). **Controller MQTT topics** use the **endpoint `slug`**, not the bus-slug (§3.1.1).
 
-Example shape (illustrative; **`serial` + `visca`** and **`udp` + `visca`** buses; aligns with
-**`config/hambridge.yaml.example`**):
+**Validation (normative, wire buses):**
+
+* **`protocol: visca`** **must** use **`transport: serial`** or **`transport: udp`** (never **`none`**).
+* **`transport: udp`** **must** pair with **`protocol: visca`** on that row (UDP is only for VISCA wire
+  in this spec; **`evdev`** buses use **`transport: none`**).
+* **`transport: udp`**: **`transport_configuration.bindPort`** is **required**; **`bindHost`** follows §3.4.
+  **Multiple** **`transport: udp`** rows (**multiple bus-slugs**) are allowed — each defines its own
+  listen socket **`bindHost`/`bindPort`** (ports **must** not conflict on the host).
+* **`transport: serial`**: **`transport_configuration.port`** (and related serial fields) per §3.4.
+
+#### Normative endpoints schema (v0.4.2+; evdev folded in v0.4.3+)
+
+The top-level **`endpoints`** key is a **sequence** (YAML array); each element is one **endpoint**
+object. Per-field rules are summarized in the table below. Unknown keys under **`match`** (and other
+reserved **`match`** dimensions such as sysfs / USB identity) **may** appear in later revisions; until
+then they are **ignored** per §3.0.3.
+
+**Normative field summary (`endpoints[]` is a YAML sequence; each row is one endpoint object):**
+
+| Config Item | Requires | Values | Notes |
+|-------------|----------|--------|-------|
+| **`endpoints[].slug`** | Always | `camera_stage`, `usb-keypad-ptz` | Letters, digits, `_`, `-` only; no `/`. Used in MQTT: `device/<slug>/…` or `controller/<slug>/…`. **Globally unique** across all endpoints. |
+| **`endpoints[].match`** | Always | *(mapping)* | Discriminates **`device`** vs **`controller`** and binds the endpoint to a **`buses`** row. |
+| **`endpoints[].match.endpoint_type`** | Always | `device`, `controller` | Together with **`match.protocol`** (controllers) determines which other keys apply. |
+| **`endpoints[].match.bus`** | Always | `rs485-1`, `evdev` | **Bus-slug**; **must** match a key under **`buses`**. For **`device`**, that bus **`protocol`** **must** be **`visca`**. For **`controller`** + **`evdev`**, bus **`protocol`** **must** be **`evdev`** and **`protocol_config.enabled`** **must** be **`true`**. For **`controller`** + **`visca`**, bus **`protocol`** **must** be **`visca`** (**`transport`** **`serial`** or **`udp`**). |
+| **`endpoints[].match.protocol`** | **`endpoint_type: controller`** only | `evdev`, `visca` | **Must not** appear on **`device`**. **`visca`**: ingress decode for that **VISCA** bus (serial or UDP wire); publish MQTT JSON on **`controller/<slug>/…`**. **At most one** **`controller`** endpoint with **`match.protocol: visca`** per **`match.bus`** (single decode owner per medium). |
+| **`endpoints[].match.deviceID`** | **`device`** and **`buses[match.bus].protocol` is `visca`** | `1` … `7` | VISCA peripheral address (wire byte **`0x80 + deviceID`**); same role as pre-v0.4.2 **`viscaAddress`**. Omit when not a VISCA **device** endpoint. |
+| **`endpoints[].match.deviceNode`** | **`controller`** and **`match.protocol` is `evdev`** | `/dev/input/event2` | Kernel evdev character device path. **Pairwise unique** among **`evdev`** controllers. |
+| **`endpoints[].model`** | **`device`** only | `marshall-cv344` | **Must not** appear on **`controller`**. Selects **`models.<name>`** in **`device_mappings.visca`**. |
+| **`endpoints[].scheduler`** | Optional; meaningful only for **`device`** | *(mapping)* | VISCA pacing: **`minInterCommandMs`**, **`maxQueueDepth`**, **`ackTimeoutMs`**, **`commandRetryMax`**, **`retryBackoffMs`**, **`coalesce`** (array of path segments). On **`controller`** + **`evdev`**: **ignored** if present. |
+| **`endpoints[].udpHost`**, **`endpoints[].udpPort`** | **`device`** on **`transport: udp`** bus | `192.0.2.10`, `52381` | **Required** unless **`buses[match.bus].transport_configuration`** sets **both** **`defaultUdpHost`** and **`defaultUdpPort`** (then those are the fallback for outbound and **must-match** reply correlation — §3.4). If the endpoint sets **either** host or port, **both** **must** be set. Omit when **`transport`** is not **`udp`**. |
+| **`endpoints[].grabExclusive`** | Optional **`controller`** + **`evdev`** | `true`, `false` | `EVIOCGRAB`; default **`false`** if omitted (implementation-defined but must document). |
+| **`endpoints[].mqttTopic`** | Optional **`controller`** + **`evdev`** | `custom/topic` | Overrides **event** publish topic only; default **`controller/<slug>/event`**. Implementations **should** publish **`controller/<slug>/status`** snapshots (same pattern as VISCA controller streams) unless documented otherwise. |
+
+**Binding and uniqueness (normative):** For **`device/<slug>/<command>`**, the bridge resolves **`slug`**
+to the unique **`endpoint_type: device`** entry. **`match.bus`** / **`match.deviceID`** supply wire routing
+and **`[device]`** assembly (§3.3). **Serial:** inbound VISCA replies are attributed by **`(match.bus, match.deviceID)`**
+on the shared medium. **UDP:** see §3.4 — reply routing uses **`(match.bus, remoteHost, remotePort, match.deviceID)`**
+per decoded frame, where **`remoteHost/remotePort`** **must** match the endpoint’s resolved **`udpHost/udpPort`**.
+
+**`slug`** **must** be **pairwise distinct across all endpoints** (device and controller). Among **`device`**
+endpoints on **`visca`** **serial** buses, **`(match.bus, match.deviceID)`** **must** be pairwise distinct.
+Among **`device`** endpoints on the **same** **`transport: udp`** **`match.bus`**, **`(udpHost, udpPort, match.deviceID)`**
+**must** be pairwise distinct after resolving bus **`defaultUdpHost`/`defaultUdpPort`** (same triple must
+not identify two endpoints).
+
+**No reuse across buses (UDP, normative):** A resolved **`(udpHost, udpPort)`** pair **must not** appear on
+**two different** UDP VISCA buses. In other words: two endpoints may share the same remote **`udpHost/udpPort`**
+only when they share the same **`match.bus`**; distinction between devices behind one remote then relies on
+different **`match.deviceID`** values (i.e. unique **`(udpHost, udpPort, match.deviceID)`** on that bus).
+
+**At most one** **`controller`** with **`match.protocol: visca`** per **`match.bus`**. Among **`controller`**
+endpoints with **`match.protocol: evdev`**, **`match.deviceNode`** **must** be pairwise distinct (one endpoint
+per opened input node).
+
+Example shape (illustrative; **`serial` + `visca`**, **`udp` + `visca`**, and **`evdev`** logical bus):
 
 ```yaml
 device_mappings:
@@ -345,12 +403,20 @@ buses:
       allowFrom: ["192.0.2.0/24"]
       defaultUdpHost: null
       defaultUdpPort: null
+  evdev:
+    transport: none
+    protocol: evdev
+    protocol_config:
+      enabled: true
+    transport_configuration: {}
 
-devices:
-  - slug: camera_stage
+endpoints:
+  - match:
+      endpoint_type: device
+      bus: rs485-1
+      deviceID: 1
+    slug: camera_stage
     model: marshall-cv344
-    bus: rs485-1
-    viscaAddress: 1
     scheduler:
       minInterCommandMs: 50
       ackTimeoutMs: 500
@@ -358,17 +424,29 @@ devices:
       retryBackoffMs: 50
       maxQueueDepth: 50
       coalesce: [pan, tilt, zoom]
-
-evdev:
-  enabled: false
-  inputs:
-    - slug: usb-keypad-ptz
+  - match:
+      endpoint_type: controller
+      protocol: evdev
+      bus: evdev
       deviceNode: /dev/input/event2
-      grabExclusive: false
-      mqttTopic: evdev/usb-keypad-ptz/event
+    slug: usb-keypad-ptz
+    grabExclusive: false
+  - match:
+      endpoint_type: device
+      bus: visca-udp-1
+      deviceID: 1
+    slug: camera_udp
+    model: marshall-cv344
+    udpHost: 192.0.2.10
+    udpPort: 52381
+  - match:
+      endpoint_type: controller
+      protocol: visca
+      bus: visca-udp-1
+    slug: udp-visca-sniff
 ```
 
-Per-device **`scheduler`** (VISCA): **`minInterCommandMs`**,
+Per-endpoint **`scheduler`** (VISCA **`device`** endpoints): **`minInterCommandMs`**,
 **`maxQueueDepth`**, **`ackTimeoutMs`**, **`commandRetryMax`**,
 **`retryBackoffMs`**. **`coalesce`** is a sequence of
 **first path segments** (e.g. `pan` matches `pan` and `pan/…` topics): before
@@ -378,31 +456,19 @@ this way).
 
 Wire-specific serial and UDP fields are specified under **`transport_configuration`** in §3.4.
 
-**VISCA logical bus vs wire addressing:** The Sony VISCA framing you use on a link does **not**
+**VISCA logical bus vs wire addressing (for `buses.*.protocol: visca` only):** The Sony VISCA framing you use on a link does **not**
 define a separate global “bus ID” byte distinct from **device/peripheral address** (typically
-**1–7**, configured as **`viscaAddress`** per device). One physical medium — one serial port (**one
+**1–7**, configured as **`match.deviceID`** per **`endpoint_type: device`** endpoint). One physical medium — one serial port (**one
 `bus-slug`**) or one UDP bind (**one `bus-slug`**) — carries traffic for **multiple** devices that
-differ by **`viscaAddress`** only. So the mapping is:
+differ by **`match.deviceID`** only. So the mapping is:
 **`bus-slug` → one transport endpoint (TTY or UDP listener) → one shared VISCA medium**;
-**`viscaAddress` → which device on that medium**. (Some ecosystems use the words “bus” loosely; on
+**`match.deviceID` → which device on that medium**. (Some ecosystems use the words “bus” loosely; on
 the wire here, **per-medium** identity is the bridge **`bus-slug`**, and **per-device** identity on
-that medium is **`viscaAddress`**.)
+that medium is **`match.deviceID`**.)
 
-`evdev` block (when `enabled` is true):
-
-* **`inputs`**: list of sources. Each entry names **which kernel input node** to open and **where**
-  to publish JSON events (see §3.1.2).
-* **`deviceNode`**: path under `/dev/input/` (e.g. `/dev/input/event2`). The implementation may
-  optionally support discovery by name or sysfs attributes later; the config must at minimum
-  allow explicit node paths for deterministic deployments.
-* **`grabExclusive`**: whether to `EVIOCGRAB` the device so only this process receives events
-  (use with care if the same keyboard is shared with the console).
-* **`slug`**: stable MQTT segment for this input (letters, digits, `_`, `-`); used in default topics and emitted as **`inputSlug`** in JSON (§3.1.2).
-* **`mqttTopic`**: topic for that input's event stream. If omitted, the default is
-  `evdev/<slug>/event`.
-* **Implementation**: HaMBridge uses the **`libevdev`** C library (linked as `-l:libevdev.so.2`) via a small
-  Pascal binding unit. Raw `ioctl`/`read` is reserved for a possible later alternative; either
-  way the MQTT contract above does not change.
+**`protocol: evdev` buses:** A bus entry with **`protocol: evdev`** is a **logical** bus (no serial or
+UDP socket). It groups **Linux input** **controller** endpoints that list its **`bus-slug`** in **`match.bus`**.
+**`protocol_config.enabled`** gates whether those endpoints are active.
 
 
 ## 3.1.1 VISCA Commands in MQTT
@@ -444,7 +510,7 @@ Commands should be slash-separated and safe to embed in MQTT topics. Examples:
   * Topic: `device/camera_stage/preset/set`
   * Payload: `{ "value": 3 }`
 
-* Controller event JSON (to `controller/rs485-1/event`):
+* Controller event JSON (to **`controller/<slug>/event`**, e.g. `controller/ptz-panel/event`):
   * ```
   	{
   		"command": "preset/set",
@@ -471,9 +537,9 @@ device/<slug>/commandAck
 
 `device/<slug>/telemetry`: may include a **`decode`** object for device replies (generic VISCA: **replyClass**, **socket**, **payload** bytes, **code** for errors).
 
-`device/<slug>/status`: JSON includes **`lastController`**, **`lastReply`**, and optional **`state`** (`pan`, `tilt`, `zoom`, `preset` keys with last-known MQTT JSON payloads from the bridge or from decoded controller traffic). **`lastReply`** may include the same **`decode`** field as telemetry when available.
+`device/<slug>/status`: JSON includes **`lastController`**, **`lastReply`**, and optional **`state`** (`pan`, `tilt`, `zoom`, `preset` keys with last-known MQTT JSON payloads from the bridge or from decoded controller traffic). **`lastController`** is the last **MQTT-published** semantic or raw event from a **VISCA** **`controller`** endpoint (**`controller/<slug>/…`**), not the result of UDP **reply** correlation alone. **`lastReply`** (device-originated) uses **UDP** **source IP:port** + **`deviceID`** correlation per §3.4 when **`transport: udp`**. **`lastReply`** may include the same **`decode`** field as telemetry when available.
 
-`device/<slug>/commandAck`: JSON result for each **bridge-originated** VISCA command (success after ACK/completion, failure on timeout / serial I/O / encode / VISCA error). Set `scheduler.ackTimeoutMs` to **0** to skip waiting for a VISCA reply (fire-and-forget; payload still reports `viscaKind` **immediate**). When the encoded packet matches the last successful wire for that command path, the bridge may skip TX and publish `viscaKind: skipped` with `reason: redundant`.
+`device/<slug>/commandAck`: JSON result for each **bridge-originated** VISCA command (success after ACK/completion, failure on timeout / serial or UDP I/O / encode / VISCA error). Set `scheduler.ackTimeoutMs` to **0** to skip waiting for a VISCA reply (fire-and-forget; payload still reports `viscaKind` **immediate**). When the encoded packet matches the last successful wire for that command path, the bridge may skip TX and publish `viscaKind: skipped` with `reason: redundant`.
 
 #### VISCA-controller → MQTT (semantic JSON events)
 
@@ -484,21 +550,25 @@ JSON tooling (e.g. Node-RED), the bridge should be able to **listen to VISCA tra
 This is intentionally *not* a raw-bytes tunnel as the primary interface; the goal is MQTT-friendly
 JSON that intermediaries can inspect/transform/reroute.
 
-Suggested topics:
+Suggested topics ( **`slug`** = the **controller endpoint’s** `slug` from **`endpoints`**):
 
 ```
-controller/<bus-slug>/event
-controller/<bus-slug>/status
+controller/<slug>/event
+controller/<slug>/status
 ```
 
-The bridge publishes **`controller/<bus-slug>/status`** after each **`controller/<bus-slug>/event`** and after device-side replies on that bus, with **`lastController`** and **`lastDeviceReply`** snapshots (JSON objects or `null`).
+The bridge publishes **`controller/<slug>/status`** after each **`controller/<slug>/event`** for that
+endpoint and (for VISCA decode paths) after device-side replies on the **same `match.bus`**, with
+**`lastController`** and **`lastDeviceReply`** snapshots (JSON objects or `null`) as today’s semantics,
+but keyed to the **endpoint `slug`** topic family.
 
-Suggested payload for `controller/<bus-slug>/event` (JSON):
+Suggested payload for **`controller/<slug>/event`** (VISCA-derived JSON):
 
 ```json
 {
   "ts": 1713720000,
   "bus": "rs485-1",
+  "slug": "ptz-panel",
   "source": "controller",
   "command": "power/set",
   "payload": { "state": "on" },
@@ -512,6 +582,8 @@ Notes:
   Prefer slash-separated command paths (e.g. `zoom/drive`, `preset/call`, `osd/menu`, `osd/nav`)
   so they can be embedded in MQTT topics without translation.
 * `payload` is command-specific and is what intermediaries should transform.
+* **`bus`** is the **`match.bus`** bus-slug (wire medium). **`slug`** repeats the endpoint **`slug`**
+  (topic segment) for subscribers that only inspect payloads.
 * `trace.viscaHex` is for debugging.  
 
 Forwarding rule (controller event → device control topic):
@@ -530,38 +602,48 @@ For example, a controller-derived "pan left" event could be represented as:
 * Topic: `device/camera_stage/pan`
 * Payload: `{ "dir": "left", "speed": 10 }`
 
-## 3.1.2 Evdev Events in MQTT
+## 3.1.2 Linux evdev (controller endpoints, v0.4.3+)
 
-**Linux-only** capability: open configured **`/dev/input/event*`** nodes via **`libevdev`**
-(linked as `-levdev`, see §6), read kernel **input events** (`struct input_event`: `type`,
-`code`, `value`, time), and **publish each event as JSON to MQTT**.
+**Linux-only** capability: each **`endpoint_type: controller`** endpoint with **`match.protocol: evdev`**
+opens **`match.deviceNode`** via **`libevdev`** (linked as `-l:libevdev.so.2`, see §6), reads kernel
+**input events** (`struct input_event`: `type`, `code`, `value`, time), and **publishes each event as
+JSON** to MQTT.
 
-Raw `read()`/`ioctl()` on the character device is a possible future alternative implementation
-but is not currently implemented.
+Configuration lives only under **`endpoints`** (there is **no** top-level **`evdev`** block). The
+endpoint’s **`match.bus`** **must** reference a **`buses`** entry with **`protocol: evdev`** and
+**`protocol_config.enabled: true`**.
+
+Raw `read()`/`ioctl()` without libevdev is a possible future alternative; the MQTT contract below does
+not change.
 
 The bridge performs **no** translation from evdev into VISCA packets or into the canonical
-`device/<slug>/<command>` control model (§3.1.1). **Node-RED**, rules engines, or other subscribers
-subscribe to the evdev topics, interpret `type` / `code` / `value`, and publish to
-`device/<slug>/...` or elsewhere as needed.
+**`device/<slug>/<command>`** control model (§3.1.1). Subscribers use **`controller/<slug>/event`** and
+may publish to **`device/<slug>/…`** or elsewhere as needed.
 
-### Suggested MQTT topics
+### MQTT topics
 
-Per-input topic (recommended), configured explicitly or defaulted:
+Default per-endpoint event topic:
 
 ```
-evdev/<slug>/event
+controller/<slug>/event
 ```
+
+Optional **`mqttTopic`** on the endpoint overrides the event topic only; status snapshots (if
+implemented) remain under **`controller/<slug>/status`** unless otherwise documented by the
+implementation.
+
+The historical **`evdev/<slug>/event`** topic family is **removed** from the normative spec.
 
 ### Payload shape
 
-Stable, easy-to-parse JSON mirroring the evdev data. Numeric `typeNum` and `codeNum` are
-**always** present so subscribers do not depend on a symbol table. Symbolic `type` and `code`
-strings are populated by `libevdev_event_type_get_name` and `libevdev_event_code_get_name`; if
-libevdev cannot resolve them (rare), those fields are emitted as `null`. Example:
+Stable, easy-to-parse JSON mirroring the evdev data. Numeric **`typeNum`** and **`codeNum`** are
+**always** present. Symbolic **`type`** and **`code`** strings come from **`libevdev_event_type_get_name`**
+and **`libevdev_event_code_get_name`**; if resolution fails, those fields are **`null`**. Example:
 
 ```json
 {
   "ts": 1713720000123,
+  "slug": "usb-keypad-ptz",
   "inputSlug": "usb-keypad-ptz",
   "deviceNode": "/dev/input/event2",
   "source": "evdev",
@@ -573,6 +655,11 @@ libevdev cannot resolve them (rare), those fields are emitted as `null`. Example
 }
 ```
 
+* **`slug`** and **`inputSlug`** **must** both repeat the endpoint **`slug`** (same string) for
+  compatibility with older consumers that read **`inputSlug`**.
+* **`bus`** may be included as the **`match.bus`** bus-slug (logical **`evdev`** bus); recommended for
+  symmetry with VISCA controller JSON.
+
 * `ts` is milliseconds since Unix epoch from the bridge clock; the kernel `input_event.time` is
   not surfaced separately (can be added later).
 * `value` follows kernel convention: for `EV_KEY` it is `0` release, `1` press, `2` repeat;
@@ -580,40 +667,35 @@ libevdev cannot resolve them (rare), those fields are emitted as `null`. Example
 
 ### Filtering policy
 
-The bridge publishes **every event the kernel delivers**, including:
-
-* `EV_SYN` markers (so subscribers can detect input frames if they care)
-* Auto-repeat key events (`value == 2`)
-* All axis updates from `EV_REL` / `EV_ABS`
-
-Subscribers are responsible for any filtering. Future versions may grow optional per-input filter
-rules; for now the wire format stays faithful to the kernel.
+The bridge publishes **every event the kernel delivers**, including **`EV_SYN`**, auto-repeat key
+events (`value == 2`), and axis updates. Subscribers filter as needed.
 
 ### MQTT QoS and retain
 
-Evdev publishes use **QoS 0** by default and **`retain = false`** (events are point-in-time;
-retaining them would mislead late subscribers). These defaults are not configurable for now.
+Evdev-derived publishes use **QoS 0** by default and **`retain = false`**.
 
 ### Relationship to §3.1.1
 
-Evdev streams are **separate** from **VISCA-controller semantic events** on
-`controller/<bus-slug>/event`. The latter remain decoded VISCA → JSON; evdev topics carry **raw input
-events** only.
+**Evdev** traffic is a **`controller`** stream: **`controller/<slug>/event`** carries **raw** kernel
+input JSON. **VISCA** **`controller`** endpoints (**`match.protocol: visca`**, bus **`serial`** or **`udp`**)
+use the **same MQTT topic family** with decoded **`command`** / **`payload`** / **`trace.viscaHex`** shapes.
 
 ### Implementation notes
 
 * Integrate with the process **main poll loop**: a single thread does `poll()` over each input
   fd plus a periodic MQTT client tick. No per-input thread.
 * **Hotplug** policy:
-  * If `deviceNode` is missing or temporarily unavailable at startup or after disconnect, the
+  * If **`match.deviceNode`** is missing or temporarily unavailable at startup or after disconnect, the
     bridge logs a warning and **retries with exponential backoff** (e.g. 1 s → 2 s → 4 s,
     capped at ~30 s).
   * Read errors that look like a disconnected device (e.g. `ENODEV`) close the fd and re-enter
     the retry loop.
   * The bridge **only exits non-zero** on clearly fatal misconfiguration (e.g. malformed
     `hambridge.yaml`), not on an absent input node.
-* When an input is grabbed (`grabExclusive = true`), failure to acquire the grab is logged and
-  the bridge falls back to non-exclusive reading rather than aborting.
+* When **`grabExclusive`** is true, failure to acquire the grab is logged and the bridge falls back to
+  non-exclusive reading rather than aborting.
+
+* **Implementation**: HaMBridge uses the **`libevdev`** C library via a small Pascal binding unit.
 
 ---
 
@@ -698,8 +780,8 @@ settings, or extended presets.
 
 **Normative path:** MQTT → VISCA encoding is **only** through the YAML file named by
 **`device_mappings.visca`** (and the same logical schema whether the file is merged at load time—an
-implementation detail). The bridge selects the mapping **`model`** string from each object in the
-top-level **`devices`** sequence in **`hambridge.yaml`**. There is **no** specified or required parallel layer of per-model Pascal “encoder
+implementation detail). The bridge selects the mapping **`model`** string from each **`endpoint_type: device`**
+object in the **`endpoints`** sequence in **`hambridge.yaml`**. There is **no** specified or required parallel layer of per-model Pascal “encoder
 profile” classes; model quirks and extensions are expressed by **adding or overriding topics and
 frames under that model** in the mapping document.
 
@@ -725,7 +807,7 @@ The mapping file must support:
 
 For topics that define a **non-empty `template`** array:
 
-1. **`[device]`** — single byte **`0x80 + viscaAddress`** (from the device row in **`hambridge.yaml`**, clamped to 1..7). Not stored in `bytes`.
+1. **`[device]`** — single byte **`0x80 + match.deviceID`** (from the **`endpoint_type: device`** endpoint in **`hambridge.yaml`**, clamped to 1..7). Not stored in `bytes`.
 2. **`bytes`** — space-separated hex for the **fixed middle** (normally includes **`01`** controller + category/command bytes).
 3. **Template slots** — each name in `template` appends **one byte**: look up the key in the MQTT payload object, then in **`variables`**, case-insensitive keys. Values may be JSON numbers **0–255** or strings (`"02"`, `"$02"`).
 4. **`FF`** — terminator appended by the bridge.
@@ -769,16 +851,20 @@ Publishing MQTT to **`device/camera_stage/preset/call`** with payload **`{"prese
 
 ### VISCA over IP (UDP)
 
-In addition to serial buses, HaMBridge can support VISCA transported over IP using **UDP**
-(“VISCA over IP”). This transport supports:
+In addition to serial buses, HaMBridge supports VISCA carried in **UDP datagrams** on the wire
+(**raw VISCA framing** — bytes terminated by **`0xFF`** per §3.3 / §3.4). **JSON exists only on MQTT**;
+UDP payloads are **not** JSON.
 
-1. **Controller ingest / protocol translation (primary):** receive VISCA frames from one or more
-   network controllers on the **same logical bus** and publish MQTT-friendly JSON on
-   `controller/<bus-slug>/event` (and snapshots on `controller/<bus-slug>/status`), so downstream
-   tooling can transform/reroute to `device/<slug>/...`.
-2. **Device control:** send VISCA commands to devices that accept VISCA/UDP, with MQTT
-   **`device/<slug>/commandAck`**, **`device/<slug>/telemetry`**, and **`device/<slug>/status`**
-   semantics aligned with serial where practical.
+This transport supports:
+
+1. **Controller ingest / decode:** receive VISCA frames on the bus’s **`bindHost`/`bindPort`** and run
+   the same decode path as serial RX. Publish **MQTT** JSON on **`controller/<slug>/event`** (and
+   **`controller/<slug>/status`**), where **`slug`** is the **`endpoint_type: controller`** row with
+   **`match.protocol: visca`** and **`match.bus`** equal to that UDP bus-slug (**exactly one** such
+   endpoint per **`match.bus`** — see endpoints table).
+2. **Device control:** send **VISCA** datagrams to cameras/controllers; **MQTT**
+   **`device/<slug>/commandAck`**, **`device/<slug>/telemetry`**, and **`device/<slug>/status`** use the
+   **same JSON semantics** as on serial (telemetry/status parity — §3.1.1).
 
 #### Configuration (`transport_configuration` under `buses`)
 
@@ -786,7 +872,8 @@ Each bus entry follows §3.1: **`transport`**, **`transport_configuration`**, **
 **`protocol_config`**. Wire-level settings below apply to the mapping named **`transport_configuration`**
 (not as siblings of **`transport`** on the bus object).
 
-Each entry **must** set **`transport`** to **`serial`** or **`udp`**.
+Each entry **must** set **`transport`** to **`serial`**, **`udp`**, or **`none`** ( **`none`** only when
+**`protocol`** is **`evdev`**, per §3.1).
 
 **Serial (`transport`: `serial`):** under **`transport_configuration`**: `port`, `baud`, `dataBits`,
 `parity`, `stopBits`, optional **`rs485`** (direction-control and timing fields as implemented), …
@@ -799,21 +886,61 @@ Each entry **must** set **`transport`** to **`serial`** or **`udp`**.
 * **`allowFrom`:** optional list of CIDR strings; if present, datagrams from other sources are dropped
   without emitting MQTT (defence-in-depth).
 * **`defaultUdpHost`** / **`defaultUdpPort`:** optional default remote for **outbound** device control
-  when a device row does not specify `udpHost` / `udpPort`.
+  when a **`device`** endpoint does not specify `udpHost` / `udpPort`.
+
+**Evdev logical bus (`transport`: `none`, `protocol`: `evdev`):** **`transport_configuration`** is **`{}`**.
+No serial or UDP socket is opened for this bus row. **`protocol_config.enabled`** gates **`match.bus`**
+references from **`endpoints`** (§3.1).
 
 **Bus identity:**
 
-* **`bus-slug`** (the object key under **`buses`**) identifies the **whole bus** for MQTT topics
-  (`controller/<bus-slug>/…`). **Multiple controllers** may send to the same UDP listener; all are
-  on the same logical bus. Distinguish sources using **`trace`** fields on published JSON (below).
+* **`bus-slug`** (the object key under **`buses`**) identifies the **shared wire or logical medium**
+  (VISCA serial/UDP, or the **`evdev`** logical bus). **Controller MQTT topics** use **`controller/<slug>/…`**
+  where **`slug`** is the **endpoint**’s **`slug`**, not the bus-slug. **Multiple UDP senders** may hit
+  the same **`bindPort`**; distinguish sources using **`trace`** fields on published JSON (below).
 
-Each VISCA device references **`bus: "<bus-slug>"`**. For UDP device control, each device **must**
-have a resolvable remote endpoint: **`udpHost`** / **`udpPort`** on the device row, or bus-level
-**`defaultUdpHost`** / **`defaultUdpPort`**.
+Each VISCA **`device`** endpoint references **`match.bus: "<bus-slug>"`**. For **UDP** device control,
+the **remote** host/port used for **outbound** datagrams is:
+
+* **`endpoints[].udpHost`** and **`endpoints[].udpPort`** when **both** are set on the endpoint; else
+* **`transport_configuration.defaultUdpHost`** and **`defaultUdpPort`** on that **`buses`** row — **both**
+  **must** be set if the endpoint omits **`udpHost`/`udpPort`**.
+
+**Load-time:** every **`device`** on a **`transport: udp`** bus **must** have a resolvable **`(udpHost, udpPort)`**
+after the rule above (else fail closed).
+
+**Reply routing (UDP, normative):** Device-originated datagrams arrive on the socket for **`buses.<bus-slug>`**
+(so the **bus** is known from the receiving socket). Let **`remoteHost`** / **`remotePort`** be the datagram
+source. For each extracted VISCA frame, parse its **device/peripheral address** byte and compute
+**`deviceID`** (1..7).
+
+Attribute that frame to the unique **`endpoint_type: device`** endpoint with:
+
+* **`match.bus`** equal to this bus-slug,
+* resolved **`udpHost`/`udpPort`** equal to **`remoteHost`/`remotePort`** (string and port **must match** exactly), and
+* **`match.deviceID`** equal to the parsed **`deviceID`**.
+
+Then run the same device-reply decode and publish pipeline as serial for **`device/<slug>/telemetry`** and
+**`device/<slug>/status`**.
+
+**NAT / asymmetric paths (v0.4.4):** the **remoteHost/remotePort must-match** rule is strict — deployments
+where return traffic does not match the configured remote **will not** correlate; relaxing that is a
+later spec change.
+
+**Sufficiency:** **`(bus via receiving socket, remoteHost, remotePort, deviceID in frame)`** is sufficient
+when uniqueness holds: **on the same UDP bus**, no two **`device`** endpoints share the same resolved
+**`(udpHost, udpPort, deviceID)`** triple. Two devices may share one NAT public **`(host, port)`** when
+their VISCA **`deviceID`** values differ (the triple stays unique). If the triple is duplicated, routing
+is ambiguous and the bridge must fail load (preferred) or log-and-drop (must be documented).
+
+**ACK / completion / retry (UDP, recommendation):** Use the **same** per-endpoint **`scheduler`** fields as
+serial (**`ackTimeoutMs`**, **`commandRetryMax`**, **`retryBackoffMs`**, …). Lossy links may need a **lower**
+**`ackTimeoutMs`** or operator tuning; implementations **should** treat persistent UDP socket errors like
+serial I/O errors (log, backoff, continue).
 
 #### Controller events: `trace` fields (UDP)
 
-For traffic received over UDP, `controller/<bus-slug>/event` payloads **should** include:
+For traffic received over UDP, **`controller/<slug>/event`** payloads **should** include:
 
 * **`trace.transport`:** `"udp"`.
 * **`trace.remoteHost`:** source IP string.
@@ -840,36 +967,43 @@ exact default is implementation-defined). No trailing bytes after `0xFF` in the 
 * **Oversized datagram:** drop or truncate per implementation policy; must be documented and must not
   crash the process.
 
-These datagram rules are **recommended normative** behaviour for interoperability (“be conservative in
-what you send, liberal in what you accept”).
+These datagram rules are **normative** for v0.4.4+ UDP VISCA interoperability (“be conservative in what
+you send, liberal in what you accept”).
 
 #### Frame handling (receive)
 
 When a UDP datagram is received on a VISCA/UDP bus:
 
 * Apply **`allowFrom`** if configured.
-* Extract zero or more VISCA frames per the rules above.
-* Pass each frame through the same “VISCA sniff / decode” path as serial RX.
-  * If it matches a known controller-originated command, publish `controller/<bus-slug>/event` with
-    semantic JSON (`command`, `deviceSlug` when resolvable, `payload`, **`trace`** as above).
+* Extract zero or more **VISCA** frames per the rules above (wire bytes only).
+* **Device-originated** replies: attribute to **`device/<slug>/…`** using **reply routing** above, then run
+  the same reply/decode path as serial for **`telemetry`/`status`**.
+* **Controller-originated** (or unclassified) frames: pass through the same “VISCA sniff / decode” path
+  as serial RX. Let **`slug`** be the **`controller`** endpoint **`slug`** with **`match.protocol: visca`**
+  and **`match.bus`** equal to this bus-slug.
+  * If it matches a known controller-originated command, publish **`controller/<slug>/event`** with
+    semantic **MQTT** JSON (`command`, `deviceSlug` when resolvable, `payload`, **`trace`** as above).
   * If it cannot be mapped, publish a raw controller event (`command: "event"`, `payload.raw: true`)
     with **`trace.viscaHex`** and **`trace.remoteHost`** / **`trace.remotePort`**.
 
 #### Frame handling (send — device control over UDP)
 
-For device control, the bridge sends encoded VISCA frames (from MQTT control topics) as UDP
-datagrams to the device’s **`udpHost`** / **`udpPort`**. Use the same conservative one-frame-per-datagram
-rule as in “Sending” above unless a documented exception applies.
+For device control, the bridge sends **encoded VISCA** frames (from MQTT-subscribed control topics) as
+UDP datagrams to the endpoint’s **resolved** **`udpHost`/`udpPort`** (endpoint fields or bus defaults).
+Use the same conservative one-frame-per-datagram rule as in “Sending” above unless a documented exception applies.
 
 * **`device/<slug>/commandAck`** remains the authoritative bridge-originated command lifecycle result.
 * **`device/<slug>/telemetry`** / **`device/<slug>/status`** remain transport-agnostic (serial vs UDP).
 
 #### Topics and compatibility
 
-Transport changes do not change topic shapes:
+**MQTT** topic shapes do not depend on serial vs UDP:
 
-* Controller-side publishes remain `controller/<bus-slug>/event` and `controller/<bus-slug>/status`.
-* Device control remains `device/<slug>/<command>` regardless of serial vs UDP.
+* Controller-side publishes use **`controller/<slug>/event`** and **`controller/<slug>/status`**
+  ( **`slug`** = the owning **`controller`** endpoint).
+* Device control remains **`device/<slug>/<command>`**; **`telemetry`**, **`status`**, **`commandAck`**
+  JSON **must** follow the same semantics as on serial (field names, **`decode`**, lifecycle), aside from
+  optional transport hints inside payloads where already allowed.
 
 ### Requirements
 
@@ -878,7 +1012,7 @@ Transport changes do not change topic shapes:
 * Robust reconnection handling
 * Careful handling of RS-485 half-duplex bus direction and collisions (controller + bridge)
 
-### Example devices
+### Example serial device nodes
 
 * `/dev/ttyUSB0`
 * `/dev/ttyS0`
@@ -929,9 +1063,9 @@ Transport changes do not change topic shapes:
 
 ## Evdev → MQTT
 
-1. libevdev delivers a `struct input_event` from a configured device node
-2. Reader builds a JSON record (`type`, `typeNum`, `code`, `codeNum`, `value`, `inputSlug`, `deviceNode`, `ts`)
-3. Publisher emits to `evdev/<slug>/event` (or configured topic) at QoS 0 (default)
+1. libevdev delivers a `struct input_event` from **`match.deviceNode`** on a **`controller` / `evdev`** endpoint
+2. Reader builds a JSON record (`type`, `typeNum`, `code`, `codeNum`, `value`, `slug`, `inputSlug`, `deviceNode`, `ts`)
+3. Publisher emits to **`controller/<slug>/event`** (or **`mqttTopic`** override) at QoS 0 (default)
 4. No translation, no acknowledgement, no state retained
 
 ```mermaid
@@ -1023,7 +1157,7 @@ not committed; **`hambridge.lpr`** in `src/` is the program entry source.
 /src/
   hambridge.lpr                # program entry point
   config.pas                   # hambridge.yaml: bridge subtree + discovery + BRIDGE_* env override
-  devicesconfig.pas            # hambridge.yaml: buses, devices[], evdev, device_mappings (VISCA path)
+  devicesconfig.pas            # hambridge.yaml: buses, endpoints[], device_mappings (VISCA path)
   logger.pas                   # stdout text logger (info/warn/error/debug)
   libevdev_binding.pas         # cdecl externs for libevdev (linked via -l:libevdev.so.2)
   evdevreader.pas              # opens /dev/input/event*, polls, emits records
@@ -1041,8 +1175,9 @@ Unit responsibilities:
   signal handling (`SIGTERM` graceful shutdown).
 * **`config.pas`** — load **`hambridge.yaml`**, apply `BRIDGE_*` env overrides to the **`bridge`**
   subtree, validate. Path discovery as in §3.0.
-* **`devicesconfig.pas`** — parse **`buses`**, top-level **`devices`** sequence, **`evdev`**, and
-  **`device_mappings`** from the same loaded document as **`bridge`**.
+* **`devicesconfig.pas`** — parse **`buses`**, top-level **`endpoints`** sequence, and
+  **`device_mappings`** from the same loaded document as **`bridge`** (including **`protocol: evdev`**
+  buses and **`match.protocol: evdev`** controller endpoints).
 * **`logger.pas`** — global logger, level-filtered, plain text to stdout. No external deps.
 * **`libevdev_binding.pas`** — minimal `cdecl; external name '<symbol>'` declarations (one
   quoted linker symbol per function, e.g. `libevdev_new`) for:
@@ -1083,7 +1218,7 @@ Unit responsibilities:
 ### Example config files
 
 * **`config/hambridge.yaml.example`** — template with **`bridge`**, **`device_mappings`**, **`buses`**,
-  **`devices`**, **`evdev`** (§3.0–§3.1).
+  **`endpoints`** (§3.0–§3.1); Linux input via **`buses.*.protocol: evdev`** plus **`endpoints`** controller rows.
 * **`config/mappings/visca.yaml.example`** — minimal **`models`** / **`topics`** illustration for VISCA encode.
 
 ### Runtime prerequisites

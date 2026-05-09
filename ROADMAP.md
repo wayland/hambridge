@@ -10,7 +10,7 @@ This file lists **planned or deferred work** compared to [`docs/developers/Speci
 
 **Design note — queues:** The bridge uses **per-bus** command FIFOs with an inter-command gap. That is **intentional** (and preferred to strict per-device serialization for this design); it is not listed as a gap.
 
-**Reference — max queue depth:** Each VISCA device defaults to **`maxQueueDepth` = 50** queued commands (`hambridge.yaml` top-level **`devices`** → **`scheduler.maxQueueDepth`**, clamped to **≥ 1**). For each serial bus, the router uses the **largest** `maxQueueDepth` among devices on that bus as the cap for the **shared** bus queue (see `commandrouter` / `devicesconfig`).
+**Reference — max queue depth:** Each VISCA device defaults to **`maxQueueDepth` = 50** queued commands (`hambridge.yaml` **`endpoints`** → **`endpoint_type: device`** → **`scheduler.maxQueueDepth`**, clamped to **≥ 1**). For each serial bus, the router uses the **largest** `maxQueueDepth` among devices on that bus as the cap for the **shared** bus queue (see `commandrouter` / `devicesconfig`).
 
 ### Real-Bus Discipline and Transport Hardening Checklist
 
@@ -62,29 +62,18 @@ This file lists **planned or deferred work** compared to [`docs/developers/Speci
 
 **Shipped:** `buses.<id>` uses `transport`, `transport_configuration`, `protocol`, and optional `protocol_config` (validated as an object when present). `protocol` is `visca` only for now.
 
-## v0.4.2 — Endpoints Setup
+## v0.4.2 — Devices → Endpoints
 
-- Change `hambridge.yaml` device list to `endpoints.yaml` (or equivalent) as part of endpoints migration
-- Add the following fields to "buses"
-  - transport (only serial supported for now, but will add UDP later)
-  - protocol (only "visca" supported for now, but will support evdev later)
-
-## v0.4.3 — Devices → Endpoints
-
-- In endpoints.yaml, change the "devices" stanza to an "endpoints" stanza
+- In `hambridge.yaml`, change the "devices" stanza to an "endpoints" stanza
 - Each endpoint should have a "match" stanza, which basically says "When an event matches these, then consider it to be this endpoint".  Fields should probably be "endpoint_type", "bus" and "deviceID", for example.  
 - endpoint_type: "controller" or "device"
 
-## v0.4.4 — Evdev → Endpoints
+## v0.4.3 — Evdev → Endpoints
 
 - The "evdev" section of the config file should be rolled into the "endpoints" section, and each input should become a "controller" device.  
 - The match section should allow a "deviceNode" option, but there should be other ways of matching too.  
 
-## v0.4.5 — VISCA Controllers → Endpoints
-
-Allow defining a visca controller on serial as well (in the config file)
-
-## v0.4.6 — VISCA over UDP
+## v0.4.4 — VISCA over UDP
 
 **Intent:** add VISCA over UDP transport so HaMBridge can talk to devices that expose VISCA over IP (e.g. as supported by Bitfocus Companion’s Sony VISCA connection: `https://bitfocus.io/connections/sony-visca`).
 
@@ -179,3 +168,10 @@ MQTT acknowledgements for **bridge-originated VISCA** are tracked under **v0.3.1
 
 - [ ] **Input discovery by name or sysfs** — Still path-only; plan allows optional discovery later.
 - [ ] **Surface kernel event timestamp** in JSON — Today `ts` is bridge clock; kernel `input_event` time not exposed separately.
+
+
+# Future versions:
+## v0.4.4 — VISCA Controllers → Endpoints
+
+Allow defining a visca controller on serial as well (in the config file)
+

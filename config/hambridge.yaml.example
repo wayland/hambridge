@@ -2,8 +2,11 @@
 # Copy to config/hambridge.yaml and edit. From a clone, run with an explicit path, e.g.:
 #   ./build/hambridge --config ./config/hambridge.yaml
 # Default discovery does not load ./config/hambridge.yaml by itself.
-# Top-level keys: bridge, device_mappings, buses, devices, evdev.
+# Top-level keys: bridge, device_mappings, buses, endpoints (see Specification.md §3.0–§3.1).
 # v0.4.1+: each bus uses transport, transport_configuration, protocol, and optional protocol_config.
+# v0.4.2+: VISCA devices under endpoints[] (match.endpoint_type: device).
+# v0.4.3+: Linux input under buses.*.protocol: evdev + endpoints[] (match.endpoint_type: controller, match.protocol: evdev).
+#          Controller MQTT: controller/<slug>/event (endpoint slug). No top-level evdev: key.
 
 bridge:
   mqtt:
@@ -52,20 +55,27 @@ buses:
       allowFrom: ["192.0.2.0/24"]
       defaultUdpHost: null
       defaultUdpPort: null
+  evdev:
+    transport: none
+    protocol: evdev
+    protocol_config:
+      enabled: true
+    transport_configuration: {}
 
-devices:
-  - slug: camera_stage
+endpoints:
+  - match:
+      endpoint_type: device
+      bus: rs485-1
+      deviceID: 1
+    slug: camera_stage
     model: marshall-cv344
-    bus: rs485-1
-    viscaAddress: 1
     scheduler:
       minInterCommandMs: 50
       maxQueueDepth: 50
-
-evdev:
-  enabled: true
-  inputs:
-    - slug: example_keypad
+  - match:
+      endpoint_type: controller
+      protocol: evdev
+      bus: evdev
       deviceNode: /dev/input/event0
-      grabExclusive: false
-      mqttTopic: evdev/example_keypad/event
+    slug: example_keypad
+    grabExclusive: false
