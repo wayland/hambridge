@@ -49,7 +49,7 @@ procedure PrintHelp;
 begin
   WriteLn('HaMBridge (Hardware-MQTT Bridge) ', AppVersion);
   WriteLn('Usage: hambridge [--config PATH] [--devices PATH]');
-  WriteLn('See README.md and Specification.md.');
+  WriteLn('See README.md and docs/user/ConfigurationGuide.md.');
 end;
 
 procedure InstallSignals;

@@ -1,6 +1,6 @@
 # HaMBridge roadmap
 
-This file lists **planned or deferred work** compared to [`Specification.md`](Specification.md) and the current codebase. **Shipped releases** are recorded in [`CHANGELOG.md`](CHANGELOG.md).
+This file lists **planned or deferred work** compared to [`docs/developers/Specification.md`](docs/developers/Specification.md) and the current codebase. **Shipped releases** are recorded in [`CHANGELOG.md`](CHANGELOG.md).
 
 ---
 
@@ -10,14 +10,14 @@ This file lists **planned or deferred work** compared to [`Specification.md`](Sp
 
 **Design note — queues:** The bridge uses **per-bus** command FIFOs with an inter-command gap. That is **intentional** (and preferred to strict per-device serialization for this design); it is not listed as a gap.
 
-**Reference — max queue depth:** Each VISCA device defaults to **`maxQueueDepth` = 50** queued commands (`devices.json` → `devices[].scheduler.maxQueueDepth`, clamped to **≥ 1**). For each serial bus, the router uses the **largest** `maxQueueDepth` among devices on that bus as the cap for the **shared** bus queue (see `commandrouter` / `devicesconfig`).
+**Reference — max queue depth:** Each VISCA device defaults to **`maxQueueDepth` = 50** queued commands (`hambridge.yaml` top-level **`devices`** → **`scheduler.maxQueueDepth`**, clamped to **≥ 1**). For each serial bus, the router uses the **largest** `maxQueueDepth` among devices on that bus as the cap for the **shared** bus queue (see `commandrouter` / `devicesconfig`).
 
 ### v0.3.1 checklist
 
 - [x] **ACK / completion discipline** — Parse `scheduler.ackTimeoutMs`; after each bridge-originated command, wait for VISCA ACK / completion / error or **timeout** before the next command on that bus. **`ackTimeoutMs`: 0** skips the wait (see plan §3.1.1).
 - [x] **Serial reconnection / recovery** — Reopen the TTY after hard read/write errors with exponential backoff (`serialport`).
 - [x] **MQTT acknowledgements after bridge-originated VISCA TX** — Publish JSON on **`device/<slug>/commandAck`** (`ok`, `reason`, `attempts`, `viscaKind`, `viscaHex`, …).
-- [x] **RS-485 half-duplex / direction / collisions** — Optional per-bus **`rs485`** block in `devices.json`: `TIOCSRS485` (`enabled`, `rtsOnSend`, `rtsAfterSend`, delays). Shared-bus collision behaviour remains deployment-defined; no software multi-master arbitration.
+- [x] **RS-485 half-duplex / direction / collisions** — Optional per-bus **`rs485`** under **`transport_configuration`** in **`hambridge.yaml`**: `TIOCSRS485` (`enabled`, `rtsOnSend`, `rtsAfterSend`, delays). Shared-bus collision behaviour remains deployment-defined; no software multi-master arbitration.
 - [x] **Retry failed VISCA commands** — `scheduler.commandRetryMax` (extra attempts after the first TX) and **`retryBackoffMs`** before each resend; final failure publishes **`commandAck`** with `reason: timeout`.
 - [x] **Multi-byte template slots** — Template array entries may be strings (1 byte) or objects **`slot` + `width`** (1..8); MQTT / `variables` supply a big-endian integer or a byte array. **Nibbles** remain deferred (ROADMAP).
 - [x] **Buffered serial writes** — Software TX queue + **`PumpTransmit`** handles partial **`write()`** and **`EAGAIN`** (non-blocking fd).
@@ -26,7 +26,7 @@ This file lists **planned or deferred work** compared to [`Specification.md`](Sp
 
 ## v0.3.2 — Coalescing and device state cache
 
-**Intent:** scheduling and **state** above raw bytes-on-the-wire (without replacing `visca-mapping.json` as the way new commands are defined).
+**Intent:** scheduling and **state** above raw bytes-on-the-wire (without replacing the VISCA mapping file as the way new commands are defined).
 
 ### v0.3.2 checklist
 
@@ -53,11 +53,11 @@ Does Free Pascal have a testing suite?  If so, fill in some information here abo
 
 ## v0.4.0 - YAML Conversion
 
--   Convert all config files from YAML to JSON, and adjust the code accordingly
+-   Convert all config files from JSON to YAML, and adjust the code accordingly
 
 ## v0.4.1 - Bus Enrichment
 
-In devices.yaml, fields for buses should be:
+In **`hambridge.yaml`**, fields for buses should be:
 - transport (eg. `udp` or `serial`)
 - `transport_configuration` stanza that configures the transport
 - `protocol` (just `visca` for now)
@@ -65,7 +65,7 @@ In devices.yaml, fields for buses should be:
 
 ## v0.4.2 - Endpoints Setup
 
-- Change devices.json to endpoints.yaml
+- Change `hambridge.yaml` device list to `endpoints.yaml` (or equivalent) as part of endpoints migration
 - Add the following fields to "buses"
   - transport (only serial supported for now, but will add UDP later)
   - protocol (only "visca" supported for now, but will support evdev later)
@@ -92,7 +92,7 @@ Allow defining a visca controller on serial as well (in the config file)
 ### Visca over UDP checklist
 
 - [ ] **UDP transport** — send/receive VISCA frames over UDP (socket lifecycle, timeouts, and retry semantics).
-- [ ] **`devices.json` support** — allow selecting UDP endpoints per device (host/port) alongside serial buses.
+- [ ] **Per-device UDP endpoints** — allow selecting UDP host/port per device in **`hambridge.yaml`** alongside serial buses.
 - [ ] **Telemetry/status parity** — keep `device/<slug>/telemetry`, `device/<slug>/status`, and `device/<slug>/commandAck` semantics consistent across serial vs UDP transports.
 
 ### Visca over UDP — Open questions
@@ -152,7 +152,7 @@ ACK / completion timing and **`scheduler.ackTimeoutMs`** are tracked under **v0.
 
 *(No separate backlog lines here — **buffered writes**, half-duplex, and **serial recovery** are under **v0.3.1** above.)*
 
-## MQTT & `bridge.json` (plan §3.0–3.1, §7)
+## MQTT & `bridge` subtree (plan §3.0–3.1, §7)
 
 - [ ] **`log.format`: `json`** — Still reserved; operational logging is effectively **text** only.
 - [ ] **Full TLS configuration** — tracked under **v0.3.4** above.
@@ -160,17 +160,17 @@ ACK / completion timing and **`scheduler.ackTimeoutMs`** are tracked under **v0.
 
 MQTT acknowledgements for **bridge-originated VISCA** are tracked under **v0.3.1** above.
 
-## `devices.json` (plan §3.1 example)
+## Device list in `hambridge.yaml` (plan §3.1 example)
 
 `scheduler.ackTimeoutMs` → **v0.3.1**. **`scheduler.coalesce`** → **v0.3.2**.
 
 ## Build & install (plan §5.1)
 
-- [ ] **`make install`** — Optional install to `/usr/local/bin` + example configs under `/etc/hambridge/` — not in the `Makefile`.
+- [ ] **`make install`** — Optional install to `/usr/local/bin` + example configs under **`/etc/hambridge/config/`** — not in the `Makefile`.
 
 ## Documentation
 
-- [ ] **Strict frozen MQTT ↔ VISCA mapping spec** — Standalone artifact with exact payloads for every supported command (beyond examples in the plan and mapping JSON).
+- [ ] **Strict frozen MQTT ↔ VISCA mapping spec** — Standalone artifact with exact payloads for every supported command (beyond examples in the plan and the VISCA mapping YAML).
 
 ## Evdev (plan §3.1.2, minor)
 

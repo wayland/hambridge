@@ -1,9 +1,10 @@
 # Developing HaMBridge (Hardware-MQTT Bridge)
 
 This document is for **building from source** and contributor-oriented setup. For what the
-project does, see [README.md](README.md). Installation/deployment is in [INSTALL.md](INSTALL.md).
-The specification is in [Specification.md](Specification.md). **Release notes:** [CHANGELOG.md](CHANGELOG.md).
-**Backlog / upcoming minors:** [ROADMAP.md](ROADMAP.md).
+project does, see [README.md](../../README.md). Installation/deployment is in [INSTALL.md](../user/INSTALL.md).
+End-user configuration is in [ConfigurationGuide.md](../user/ConfigurationGuide.md). **Release notes:**
+[CHANGELOG.md](../../CHANGELOG.md). **Backlog / upcoming minors:** [ROADMAP.md](../../ROADMAP.md). For full
+architecture and protocol contracts (implementers), see [Specification.md](Specification.md).
 
 The product name is **HaMBridge**; the v0.1 build produces the `hambridge` binary.
 
@@ -38,7 +39,7 @@ From the repository root:
 ```bash
 make            # builds ./build/hambridge
 make clean      # removes ./build/
-make run        # runs against ./bridge.json + ./devices.json
+make run        # seeds config/*.yaml from *.example if missing; runs with explicit --config ./config/hambridge.yaml
 ```
 
 **Fedora RPM (optional)** — on a Fedora/RHEL-family host with `rpm-build`, `git`, and the same
@@ -53,8 +54,8 @@ make fedora-test   # builds the RPM then smoke-tests (requires, paths, hambridge
 you bump `AppVersion` in `src/hambridge.lpr` and `Version` in `packaging/Redhat/hambridge.spec`.
 
 The Makefile invokes `fpc` with `-k-L<libdir> -k-l:libevdev.so.2` when it finds that shared
-library under `/usr/lib64` or `/usr/lib/x86_64-linux-gnu`. Recommended compiler flags are
-documented in the plan (§5.1).
+library under `/usr/lib64` or `/usr/lib/x86_64-linux-gnu`. Compiler flags and repository layout are
+described in `Specification.md`.
 
 **Fully offline builds:** after a successful `make` on a networked machine, the zip under
 `build/deps/fpc-mqtt-client-*.zip` matches the `FPC_MQTT_SHA256` line in the `Makefile`. You can
@@ -67,34 +68,29 @@ See `Specification.md` for a high-level architecture and MQTT surface.
 
 ## Configuration (development copies)
 
-Example files are committed; copy and edit for local runs:
+Copy the committed YAML templates and edit:
 
 ```bash
-cp bridge.json.example bridge.json
-cp devices.json.example devices.json
+cp config/hambridge.yaml.example config/hambridge.yaml
+mkdir -p config/mappings
+cp config/mappings/visca.yaml.example config/mappings/visca.yaml
 ```
 
-- **`bridge.json`** — broker connection (host, port, auth, TLS, client ID, LWT, birth) and
-  global runtime (logging). Any field can be overridden by a `BRIDGE_*` environment variable;
-  see the plan §3.0.
-- **`devices.json`** — buses, devices, and (for v0.1) the `evdev` block listing which input
-  nodes to read. See the plan §3.1 and §3.1.2.
-
-### Config path discovery (first hit wins)
-
-1. `--config <path>` / `--devices <path>` command-line flag
-2. `BRIDGE_CONFIG` / `BRIDGE_DEVICES` environment variable
-3. `./bridge.json` / `./devices.json`
-4. `/etc/hambridge/bridge.json` / `/etc/hambridge/devices.json`
-
-`bridge.json` and `devices.json` are listed in `.gitignore` so local copies are not committed;
-only the `*.example` variants are tracked.
+**Discovery does not** look under **`./config/`** or the repo root: you **must** pass **`--config`**
+(with a path, often **`./config/hambridge.yaml`**) or set **`BRIDGE_CONFIG`** to that path. Field
+meanings and the full discovery list: **`ConfigurationGuide.md`**.
 
 ## Run (from a dev build)
 
+Use an explicit config path (same as **`make run`**):
+
 ```bash
-./build/hambridge --config ./bridge.json --devices ./devices.json
+./build/hambridge --config ./config/hambridge.yaml
 ```
+
+The **Pascal loader** must implement **`hambridge.yaml`** discovery and parsing as in
+**`Specification.md`** and **`ConfigurationGuide.md`**; until that lands, the command above may fail
+at startup when the binary still expects a different on-disk format.
 
 ## systemd / udev (production-style)
 
@@ -118,9 +114,9 @@ nodes. Options:
 
 ## Input device permissions
 
-The bridge must be able to read `/dev/input/event*`. See [README.md](README.md) for interactive
+The bridge must be able to read `/dev/input/event*`. See [README.md](../../README.md) for interactive
 use vs systemd + `packaging/udev/`.
 
 ## License
 
-Same as the project: GPL-3.0-or-later. See [LICENSE](LICENSE).
+Same as the project: GPL-3.0-or-later. See [LICENSE](../../LICENSE).

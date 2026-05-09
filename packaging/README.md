@@ -21,7 +21,7 @@ Contents:
 
 Install order (summary):
 
-1. Build or install the binary (see [DEVELOPING.md](../DEVELOPING.md)); symlink or copy to
+1. Build or install the binary (see [DEVELOPING.md](../docs/developers/DEVELOPING.md)); symlink or copy to
    `/usr/bin/hambridge` or adjust `ExecStart=` in the unit file.
 2. `sudo cp systemd/sysusers.d/hambridge.conf /usr/lib/sysusers.d/` then
    `sudo systemd-sysusers` (or reboot) to create `hambridge:hambridge`.
@@ -29,7 +29,9 @@ Install order (summary):
    `sudo systemd-tmpfiles --create` for `/var/lib/hambridge`.
 4. Copy and edit [udev/70-hambridge-input.rules](udev/70-hambridge-input.rules) into
    `/etc/udev/rules.d/`, **customise the match** for your hardware, then reload udev.
-5. Install `bridge.json` and `devices.json` under `/etc/hambridge/` (see examples in repo root).
+5. Install config under **`/etc/hambridge/config/`**: **`hambridge.yaml`** plus **`mappings/visca.yaml`**
+   (or whatever path **`device_mappings.visca`** names). Templates live under **`config/`** in the
+   source tree; see **[docs/user/ConfigurationGuide.md](../docs/user/ConfigurationGuide.md)**.
 6. `sudo cp systemd/hambridge.service /etc/systemd/system/` → `sudo systemctl daemon-reload` →
    `sudo systemctl enable --now hambridge.service`.
 

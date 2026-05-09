@@ -59,7 +59,10 @@ clean:
 	rm -rf $(OUTDIR)
 
 run: $(BINARY)
-	$(BINARY) --config ./bridge.json --devices ./devices.json
+	@mkdir -p config/mappings
+	@test -f ./config/hambridge.yaml || cp config/hambridge.yaml.example ./config/hambridge.yaml
+	@test -f ./config/mappings/visca.yaml || cp config/mappings/visca.yaml.example ./config/mappings/visca.yaml
+	$(BINARY) --config ./config/hambridge.yaml
 
 # Native build on Raspberry Pi OS / Debian: install deps then `make` (see packaging/raspbian/README.md).
 raspbian-help:

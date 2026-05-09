@@ -3,7 +3,8 @@
 A headless Linux daemon that bridges **hardware ↔ MQTT**.
 
 The v0.1 binary is **`hambridge`**; systemd and packaging use the **HaMBridge** product name and
-`/etc/hambridge/` for configuration.
+**`/etc/hambridge/`** for machine-local state; **target** YAML config lives under **`/etc/hambridge/config/`**
+(see **[docs/user/ConfigurationGuide.md](docs/user/ConfigurationGuide.md)**).
 
 ## Summary
 
@@ -11,16 +12,16 @@ The v0.1 binary is **`hambridge`**; systemd and packaging use the **HaMBridge** 
 |-------|--------|------------|-------------|
 | Linux evdev | MQTT JSON | `evdev/<slug>/event` (pub)* | Publish kernel input events as JSON. From (`/dev/input/event*`) |
 | Serial VISCA | MQTT JSON | `controller/<bus-slug>/event` (pub), `controller/<bus-slug>/status` (pub), `device/<slug>/telemetry` (pub), `device/<slug>/status` (pub), `device/<slug>/commandAck` (pub) | Decode controller traffic and device replies and publish JSON for subscribers. |
-| MQTT JSON | VISCA over serial (RS-232 / RS-485) | `device/<slug>/<command>` (sub) (bridge subscribes to `device/#`) | Encode JSON payloads with `visca-mapping.json` and transmit on the device’s bus. |
+| MQTT JSON | VISCA over serial (RS-232 / RS-485) | `device/<slug>/<command>` (sub) (bridge subscribes to `device/#`) | Encode JSON payloads using the file in **`device_mappings.visca`** (path relative to **`hambridge.yaml`**; repo templates use **`config/mappings/visca.yaml`** when you **`--config ./config/hambridge.yaml`**) and transmit on the device’s bus. |
 
 * = Configurable
 
 ## Documentation
 
-- **Install / deploy (preferred: distro packages)**: [INSTALL.md](INSTALL.md)
-- **Configuration guide** (`bridge.json`, `devices.json`, topics): [ConfigurationGuide.md](ConfigurationGuide.md)
-- **Developer / manual / interactive use**: [DEVELOPING.md](DEVELOPING.md)
-- **Specification (versionless)**: [Specification.md](Specification.md)
+- **Install / deploy (preferred: distro packages)**: [docs/user/INSTALL.md](docs/user/INSTALL.md)
+- **Configuration guide** (YAML layout, **`--config` / `BRIDGE_CONFIG`**, topics): [docs/user/ConfigurationGuide.md](docs/user/ConfigurationGuide.md)
+- **Developer / manual / interactive use**: [docs/developers/DEVELOPING.md](docs/developers/DEVELOPING.md)
+- **Specification (versionless)**: [docs/developers/Specification.md](docs/developers/Specification.md)
 - **Release notes**: [CHANGELOG.md](CHANGELOG.md)
 - **Roadmap (versioned)**: [ROADMAP.md](ROADMAP.md)
 

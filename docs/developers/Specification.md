@@ -63,53 +63,101 @@ Device Hardware
 
 # 3. Components
 
-## 3.0 `bridge.json` (broker + runtime)
+## 3.0 Configuration (`hambridge.yaml`)
 
-The bridge loads a process-wide configuration file separate from `devices.json`. `bridge.json`
-holds **broker connection** and **runtime** settings; `devices.json` holds **what** the bridge
-talks to (buses, devices, evdev inputs).
+Normative configuration is a **single UTF-8 YAML document**. Top-level keys include:
 
-### Fields
+* **`bridge`** — MQTT broker connection and global runtime (logging, TLS material paths, …).
+* **`device_mappings`** — paths to protocol mapping documents. **`device_mappings.visca`** is the
+  string path to the VISCA topic→bytes file (YAML; see §3.3). Other keys may be reserved later;
+  unknown keys under **`device_mappings`** are ignored (§3.0.3).
+* **`buses`** — object keyed by **bus-slug**; each value is a bus entry (§3.1).
+* **`devices`** — sequence (array) of VISCA device records (**`slug`**, **`model`**, **`bus`**, …).
+* **`evdev`** — optional block for Linux input → MQTT (§3.1.2).
 
-```json
-{
-  "mqtt": {
-    "host": "localhost",
-    "port": 1883,
-    "tls": {
-      "enabled": false,
-      "caFile": null,
-      "caPath": null,
-      "clientCertFile": null,
-      "clientKeyFile": null,
-      "verifyPeer": true,
-      "serverName": null,
-      "minVersion": null,
-      "maxVersion": null,
-      "ciphers": null
-    },
-    "username": null,
-    "password": null,
-    "clientId": "hambridge",
-    "keepaliveSec": 30,
-    "lwt": {
-      "topic": "bridge/hambridge/status",
-      "payload": "offline",
-      "retain": true,
-      "qos": 1
-    },
-    "birth": {
-      "topic": "bridge/hambridge/status",
-      "payload": "online",
-      "retain": true,
-      "qos": 1
-    }
-  },
-  "log": {
-    "level": "info",
-    "format": "text"
-  }
-}
+On disk, configuration is **YAML** only: **`hambridge.yaml`** plus the VISCA mapping file named by
+**`device_mappings.visca`**.
+
+In this repository, **committed templates** live under **`config/`** (e.g. **`config/hambridge.yaml.example`**,
+**`config/mappings/visca.yaml.example`**). A checkout may keep working copies beside them
+(**`config/hambridge.yaml`**, **`config/mappings/visca.yaml`**), but those paths are **not** part of
+default discovery: developers pass **`--config`** or **`BRIDGE_CONFIG`**. On a host, packaged installs
+use **`/etc/hambridge/config/hambridge.yaml`** next to **`/etc/hambridge/config/mappings/`** (or paths
+given in **`device_mappings.visca`**).
+
+### 3.0.1 File naming
+
+* **Process config:** **`hambridge.yaml`** (preferred) or **`hambridge.yml`** (accepted). When
+  probing default paths, implementations **should** try **`hambridge.yaml`** before **`hambridge.yml`**.
+* **VISCA mapping file:** path is **`device_mappings.visca`** (string). **`mappings/visca.yaml`**
+  (or **`.yml`**) is the **recommended** relative path; relative paths resolve against the directory
+  containing **`hambridge.yaml`** unless absolute.
+
+### 3.0.2 YAML parsing
+
+Configuration **must** be parsed with a **third-party YAML library** (no custom YAML grammar or
+hand-rolled scanner). For Free Pascal, [**otYaml**](https://github.com/openTemplot/otYaml) is a
+reasonable choice; which library ships in a given build **must** be documented in release notes.
+
+### 3.0.3 Unknown keys and `protocol_config`
+
+Throughout the YAML document (root, **`bridge`**, **`device_mappings`**, **`buses`**, device rows,
+**`evdev`**, bus entries, and other objects defined in this spec): **unknown keys are ignored** (no
+parse failure) so forward-compatible files load on older daemons.
+
+For **`protocol_config`** (optional, per bus): keys that are **irrelevant** to the selected
+**`protocol`** / **`transport`** are **ignored**; the spec does **not** require omitting unused
+keys.
+
+### 3.0.4 Recommended packaging paths
+
+* **`/etc/hambridge/config/hambridge.yaml`** — main configuration (config tree under **`config/`**)
+* **`/etc/hambridge/config/mappings/visca.yaml`** — typical VISCA mapping path when
+  **`device_mappings.visca`** is **`mappings/visca.yaml`** (relative to that **`hambridge.yaml`**)
+* **`/etc/hambridge/tls/`** — PEM trust and client auth material referenced from
+  `bridge.mqtt.tls.*` (restrictive modes; readable only by the service user)
+
+Example templates **`config/hambridge.yaml.example`** and **`config/mappings/visca.yaml.example`**
+should ship as package documentation (e.g. RPM **`%doc`**, or **`/usr/share/doc/hambridge/examples/`**
+on Debian).
+
+### Fields under `bridge`
+
+Illustrative YAML (TLS shown in object form; see MQTT TLS notes below):
+
+```yaml
+bridge:
+  mqtt:
+    host: localhost
+    port: 1883
+    tls:
+      enabled: false
+      caFile: null
+      caPath: null
+      clientCertFile: null
+      clientKeyFile: null
+      verifyPeer: true
+      serverName: null
+      minVersion: null
+      maxVersion: null
+      ciphers: null
+    username: null
+    password: null
+    clientId: hambridge
+    keepaliveSec: 30
+    lwt:
+      topic: bridge/hambridge/status
+      payload: offline
+      retain: true
+      qos: 1
+    birth:
+      topic: bridge/hambridge/status
+      payload: online
+      retain: true
+      qos: 1
+  log:
+    level: info
+    format: text
 ```
 
 Notes:
@@ -120,15 +168,12 @@ Notes:
 * `log.level`: one of `debug` / `info` / `warn` / `error`.
 * `log.format`: `text` for now; `json` reserved for later.
 
-
-
 ### MQTT TLS Notes
 
 * **`mqtt.tls` shape:** Either a **boolean** shorthand (`false` = TLS off; `true` = TLS on with OS
-  default trust only, peer verification per implementation default) **or** an **object** as in the
-  example. When the object is used, **`enabled`** gates TLS; other fields apply only when
-  `enabled` is true. Implementations **should** accept a legacy boolean for backward compatibility
-  and map it to the object form (`enabled` = that boolean, other fields defaulted).
+  default trust only, peer verification per implementation default) **or** a **mapping** as in the
+  example. When the mapping is used, **`enabled`** gates TLS; other keys apply only when
+  `enabled` is true.
 * **`mqtt.tls.caFile`**: path to a PEM file containing one or more CA certificates (trust anchor for
   verifying the broker). Mutually exclusive with using only `caPath` for a directory, unless the
   implementation merges both; if both are set, behaviour must be defined (recommended: prefer
@@ -153,7 +198,7 @@ Notes:
 
 ### MQTT TLS behavioural rules
 
-* **Startup / config:** Malformed JSON, unreadable `caFile` / `clientCertFile` / `clientKeyFile`, or
+* **Startup / config:** Malformed YAML, unreadable `caFile` / `clientCertFile` / `clientKeyFile`, or
   invalid combinations (e.g. client cert without key) should fail **at startup** with a clear
   error and non-zero exit (fail closed).
 * **Runtime / broker:** TLS handshake or broker auth failures should be treated like other broker
@@ -175,14 +220,14 @@ Notes:
 * **Key file permissions:** if **`clientKeyFile`** is world-readable or group-readable beyond the
   service user, implementations **should** log a **warning** or refuse startup (document which).
 * **Deployment:** Recommended layout for packaged installs is PEM files under
-  `/etc/hambridge/tls/` (or similar), readable only by the service user; `bridge.json` holds paths,
+  `/etc/hambridge/tls/` (or similar), readable only by the service user; `hambridge.yaml` holds paths,
   not inline secrets.
 
 ### Environment-variable overrides
 
-Any field above can be overridden by an environment variable. The mapping is mechanical:
+Any field under **`bridge`** in the YAML document can be overridden by an environment variable. The mapping is mechanical:
 
-* Prefix `BRIDGE_`, then uppercase the path, joining levels with `_`.
+* Prefix `BRIDGE_`, then uppercase the path under `bridge`, joining levels with `_`.
 * Examples:
   * `BRIDGE_MQTT_HOST` → `mqtt.host`
   * `BRIDGE_MQTT_PORT` → `mqtt.port`
@@ -207,18 +252,24 @@ base-10. Empty string clears the field (treated as unset).
 
 ### Config-path discovery order
 
-The bridge resolves `bridge.json` in this order; the first hit wins:
+The bridge resolves **`hambridge.yaml`** / **`hambridge.yml`** in this order; the first **existing**
+file wins:
 
-1. `--config <path>` command-line flag
-2. `BRIDGE_CONFIG` environment variable
-3. `./bridge.json` (current working directory)
-4. `/etc/hambridge/bridge.json` (recommended for **HaMBridge** systemd packages; see `packaging/systemd/`)
+1. **`--config <path>`** command-line flag (path may be `.yaml` or `.yml` or any filename; may be relative to the process working directory)
+2. **`BRIDGE_CONFIG`** environment variable (non-empty path to the main file)
+3. **`.local/etc/config/hambridge.yaml`**, then **`.local/etc/config/hambridge.yml`** (relative to the process working directory)
+4. **`/etc/hambridge/config/hambridge.yaml`**, then **`/etc/hambridge/config/hambridge.yml`**
+   (recommended for **HaMBridge** systemd packages; see `packaging/systemd/`)
+5. **`/etc/hambridge/hambridge.yaml`**, then **`/etc/hambridge/hambridge.yml`** (legacy single-file layout)
 
-`devices.json` follows the analogous pattern via `--devices <path>`, `BRIDGE_DEVICES`,
-`./devices.json`, `/etc/hambridge/devices.json`.
+There is **no** fallback that searches **`./config/`** or the current directory by name: a checkout or
+any non-standard layout **must** use step **1** or **2**. **`docs/user/ConfigurationGuide.md`** describes this for operators.
 
-If no `bridge.json` (respectively `devices.json`) is found in any of the locations above, the
-bridge logs a clear error and exits non-zero.
+**`bridge`**, **`device_mappings`**, **`buses`**, **`devices`**, and **`evdev`** are **siblings**
+at the document root (same file as **`hambridge.yaml`**). A second on-disk file is required only for
+the VISCA mapping document referenced by **`device_mappings.visca`**.
+
+If no configuration file is found, the bridge logs a clear error and exits non-zero.
 
 ---
 
@@ -239,90 +290,93 @@ bridge logs a clear error and exits non-zero.
 * JSON payload parsing
 * Non-blocking message handling
 
-### Configuration (`devices.json`)
+### Configuration (roots beside `bridge` in `hambridge.yaml`)
 
-The bridge should load a device configuration file (e.g. `devices.json`) at startup. This file
-defines:
+Alongside **`bridge`**, the process config file defines:
 
-* which serial buses exist (ports and UART settings)
-* which VISCA devices exist (**`slug`** for `device/<slug>/...`, **`viscaAddress`** 1..7 on the VISCA bus, **`model`**, **`bus`**, optional scheduler)
-* which VISCA model/profile each device uses (ties into the VISCA mapping table)
+* **`device_mappings.visca`**: path to the VISCA topic mapping YAML (see §3.3)
+* **`buses`**: which buses exist (transport, wire-level settings, protocol)
+* **`devices`**: sequence of VISCA devices (**`slug`** for `device/<slug>/...`, **`viscaAddress`**
+  1..7 on the VISCA bus, **`model`**, **`bus`**, optional **`scheduler`**)
 * optional per-device scheduler overrides (timing, queue bounds, coalescing rules)
-* optional **evdev** inputs: which kernel input nodes to open and which MQTT topic each stream
-  publishes to (see §3.1.2); the bridge emits **raw evdev-style events** only—no translation to
-  VISCA or `device/<slug>/...` commands in-process
+* **`evdev`**: optional Linux inputs—kernel nodes to open and MQTT topic per stream (§3.1.2); the
+  bridge emits **raw evdev-style events** only—no translation to VISCA or `device/<slug>/...`
+  commands in-process
 
-Example shape (illustrative):
+#### Normative bus entry schema (v0.4.1+)
 
-```json
-{
-  "buses": {
-    "rs485-1": {
-      "transport": "serial",
-      "port": "/dev/ttyUSB0",
-      "baud": 9600,
-      "dataBits": 8,
-      "parity": "N",
-      "stopBits": 1,
-      "rs485": {
-        "enabled": false,
-        "rtsOnSend": true,
-        "rtsAfterSend": false,
-        "delayRtsBeforeSend": 0,
-        "delayRtsAfterSend": 0
-      }
-    },
-    "visca-udp-1": {
-      "transport": "udp",
-      "bindHost": "0.0.0.0",
-      "bindPort": 52381,
-      "allowFrom": ["192.0.2.0/24"],
-      "defaultUdpHost": null,
-      "defaultUdpPort": null
-    }
-  },
-  "devices": [
-    {
-      "slug": "camera_stage",
-      "model": "marshall-cv344",
-      "bus": "rs485-1",
-      "viscaAddress": 1,
-      "scheduler": {
-        "minInterCommandMs": 50,
-        "ackTimeoutMs": 500,
-        "commandRetryMax": 2,
-        "retryBackoffMs": 50,
-        "maxQueueDepth": 50,
-        "coalesce": ["pan", "tilt", "zoom"]
-      }
-    }
-  ],
-  "evdev": {
-    "enabled": false,
-    "inputs": [
-      {
-        "slug": "usb-keypad-ptz",
-        "deviceNode": "/dev/input/event2",
-        "grabExclusive": false,
-        "mqttTopic": "evdev/usb-keypad-ptz/event"
-      }
-    ]
-  }
-}
+Each value under **`buses.<bus-slug>`** is a mapping with:
+
+* **`transport`** (required): wire transport identifier, e.g. **`serial`** or **`udp`**.
+* **`transport_configuration`** (required): mapping whose **keys depend on `transport`** (serial
+  vs UDP field sets are defined in §3.4). All port/baud/RS-485 and UDP bind/ACL/default-remote
+  fields live **here**, not alongside `transport` at the top level of the bus object.
+* **`protocol`** (required): logical protocol on that wire, e.g. **`visca`**.
+* **`protocol_config`** (optional): mapping for protocol-specific options. Keys that do not apply
+  to the selected **`protocol`** / **`transport`** are **ignored** (see §3.0.3).
+
+**`buses` object keys** are **bus-slugs** (MQTT segments such as `controller/<bus-slug>/event`).
+
+Example shape (illustrative; **`serial` + `visca`** and **`udp` + `visca`** buses; aligns with
+**`config/hambridge.yaml.example`**):
+
+```yaml
+device_mappings:
+  visca: mappings/visca.yaml
+
+buses:
+  rs485-1:
+    transport: serial
+    protocol: visca
+    protocol_config: {}
+    transport_configuration:
+      port: /dev/ttyUSB0
+      baud: 9600
+      dataBits: 8
+      parity: "N"
+      stopBits: 1
+  visca-udp-1:
+    transport: udp
+    protocol: visca
+    protocol_config: {}
+    transport_configuration:
+      bindHost: "0.0.0.0"
+      bindPort: 52381
+      allowFrom: ["192.0.2.0/24"]
+      defaultUdpHost: null
+      defaultUdpPort: null
+
+devices:
+  - slug: camera_stage
+    model: marshall-cv344
+    bus: rs485-1
+    viscaAddress: 1
+    scheduler:
+      minInterCommandMs: 50
+      ackTimeoutMs: 500
+      commandRetryMax: 2
+      retryBackoffMs: 50
+      maxQueueDepth: 50
+      coalesce: [pan, tilt, zoom]
+
+evdev:
+  enabled: false
+  inputs:
+    - slug: usb-keypad-ptz
+      deviceNode: /dev/input/event2
+      grabExclusive: false
+      mqttTopic: evdev/usb-keypad-ptz/event
 ```
 
 Per-device **`scheduler`** (VISCA): **`minInterCommandMs`**,
 **`maxQueueDepth`**, **`ackTimeoutMs`**, **`commandRetryMax`**,
-**`retryBackoffMs`**. **`coalesce`** is an array of
-**first path segments** (e.g. `pan` matches `pan` and `pan/…` topics): before 
-enqueueing a new command, the bridge drops older **queued** commands for the 
-same device and segment (the command currently waiting for ACK is never removed 
-this way).  
+**`retryBackoffMs`**. **`coalesce`** is a sequence of
+**first path segments** (e.g. `pan` matches `pan` and `pan/…` topics): before
+enqueueing a new command, the bridge drops older **queued** commands for the
+same device and segment (the command currently waiting for ACK is never removed
+this way).
 
-**`buses` entries:** Each key is the **bus-slug** (string identifier used in MQTT topics such as
-`controller/<bus-slug>/event`). Every bus object **must** include **`transport`**: **`"serial"`** or
-**`"udp"`**. Serial buses use `port`, `baud`, etc.; UDP buses use `bindHost`, `bindPort`, and optional
-`allowFrom` / default remote fields as in §3.4.
+Wire-specific serial and UDP fields are specified under **`transport_configuration`** in §3.4.
 
 **VISCA logical bus vs wire addressing:** The Sony VISCA framing you use on a link does **not**
 define a separate global “bus ID” byte distinct from **device/peripheral address** (typically
@@ -557,7 +611,7 @@ events** only.
   * Read errors that look like a disconnected device (e.g. `ENODEV`) close the fd and re-enter
     the retry loop.
   * The bridge **only exits non-zero** on clearly fatal misconfiguration (e.g. malformed
-    `devices.json`), not on an absent input node.
+    `hambridge.yaml`), not on an absent input node.
 * When an input is grabbed (`grabExclusive = true`), failure to acquire the grab is logged and
   the bridge falls back to non-exclusive reading rather than aborting.
 
@@ -642,12 +696,12 @@ Not all cameras implement the same VISCA feature set. Some devices support addit
 (or require different encodings) for functions like on-screen display (OSD) menu control, image
 settings, or extended presets.
 
-**Normative path:** MQTT → VISCA encoding is **only** through **`visca-mapping.json`** (and the
-same on-disk schema whether the file is single or split and merged at load time—an implementation
-detail). The bridge selects the mapping **`model`** string from each `device/<slug>` in
-`devices.json`. There is **no** specified or required parallel layer of per-model Pascal “encoder
+**Normative path:** MQTT → VISCA encoding is **only** through the YAML file named by
+**`device_mappings.visca`** (and the same logical schema whether the file is merged at load time—an
+implementation detail). The bridge selects the mapping **`model`** string from each object in the
+top-level **`devices`** sequence in **`hambridge.yaml`**. There is **no** specified or required parallel layer of per-model Pascal “encoder
 profile” classes; model quirks and extensions are expressed by **adding or overriding topics and
-frames under that model** in JSON.
+frames under that model** in the mapping document.
 
 Conceptually, the file holds **per-model** tables:
 
@@ -655,10 +709,11 @@ Conceptually, the file holds **per-model** tables:
 * **Derived** models (e.g. `marshall-cv344`): extra topics or different byte templates for OSD,
   image settings, extended presets, and so on.
 
-#### `visca-mapping.json`
+#### VISCA mapping document (`device_mappings.visca`)
 
 The mapping file is loaded at startup so commands can be added or adjusted **without recompiling**
-the bridge.
+the bridge. Its path is **`device_mappings.visca`** in **`hambridge.yaml`**. The on-disk format is
+**YAML** with **`models`**, **`topics`**, **`inherits`**, and related keys as defined in this section.
 
 The mapping file must support:
 
@@ -670,42 +725,32 @@ The mapping file must support:
 
 For topics that define a **non-empty `template`** array:
 
-1. **`[device]`** — single byte **`0x80 + viscaAddress`** (from `devices.json`, clamped to 1..7). Not stored in `bytes`.
+1. **`[device]`** — single byte **`0x80 + viscaAddress`** (from the device row in **`hambridge.yaml`**, clamped to 1..7). Not stored in `bytes`.
 2. **`bytes`** — space-separated hex for the **fixed middle** (normally includes **`01`** controller + category/command bytes).
 3. **Template slots** — each name in `template` appends **one byte**: look up the key in the MQTT payload object, then in **`variables`**, case-insensitive keys. Values may be JSON numbers **0–255** or strings (`"02"`, `"$02"`).
 4. **`FF`** — terminator appended by the bridge.
 
 If **`template`** is absent or empty, **`bytes`** must contain the **full middle** of the command (everything after **`[device]`** and before **`FF`**), as space-separated hex.
 
-Example (framed + inherited model override; illustrative):
+Example (framed + inherited model override; illustrative YAML):
 
-```json
-{
-  "models": {
-    "base-visca": {
-      "topics": {
-        "power/on": {
-          "bytes": "01 04 00",
-          "template": ["powerArgument"],
-          "variables": { "powerArgument": "02" }
-        },
-        "power/off": {
-          "bytes": "01 04 00 03"
-        }
-      }
-    },
-    "marshall-cv344": {
-      "inherits": "base-visca",
-      "topics": {
-        "preset/call": {
-          "bytes": "01 04 3F 02",
-          "template": ["presetIndex"],
-          "variables": { "presetIndex": "01" }
-        }
-      }
-    }
-  }
-}
+```yaml
+models:
+  base-visca:
+    topics:
+      power/on:
+        bytes: "01 04 00"
+        template: [powerArgument]
+        variables: { powerArgument: "02" }
+      power/off:
+        bytes: "01 04 00 03"
+  marshall-cv344:
+    inherits: base-visca
+    topics:
+      preset/call:
+        bytes: "01 04 3F 02"
+        template: [presetIndex]
+        variables: { presetIndex: "01" }
 ```
 
 Publishing MQTT to **`device/camera_stage/preset/call`** with payload **`{"presetIndex": 2}`** overrides the default **`presetIndex`** byte for that command.
@@ -735,13 +780,18 @@ In addition to serial buses, HaMBridge can support VISCA transported over IP usi
    **`device/<slug>/commandAck`**, **`device/<slug>/telemetry`**, and **`device/<slug>/status`**
    semantics aligned with serial where practical.
 
-#### Configuration (`devices.json`)
+#### Configuration (`transport_configuration` under `buses`)
 
-Each entry under **`buses.<bus-slug>`** **must** set **`transport`** to **`"serial"`** or **`"udp"`**.
+Each bus entry follows §3.1: **`transport`**, **`transport_configuration`**, **`protocol`**, optional
+**`protocol_config`**. Wire-level settings below apply to the mapping named **`transport_configuration`**
+(not as siblings of **`transport`** on the bus object).
 
-**Serial (`transport`: `"serial"`):** existing fields (`port`, `baud`, optional `rs485`, …).
+Each entry **must** set **`transport`** to **`serial`** or **`udp`**.
 
-**UDP (`transport`: `"udp"`):**
+**Serial (`transport`: `serial`):** under **`transport_configuration`**: `port`, `baud`, `dataBits`,
+`parity`, `stopBits`, optional **`rs485`** (direction-control and timing fields as implemented), …
+
+**UDP (`transport`: `udp`):** under **`transport_configuration`**:
 
 * **`bindHost`:** local address to bind (default `"0.0.0.0"` for all interfaces; use `"127.0.0.1"` for
   loopback-only if desired).
@@ -753,7 +803,7 @@ Each entry under **`buses.<bus-slug>`** **must** set **`transport`** to **`"seri
 
 **Bus identity:**
 
-* **`bus-slug`** (the object key under `buses`) identifies the **whole bus** for MQTT topics
+* **`bus-slug`** (the object key under **`buses`**) identifies the **whole bus** for MQTT topics
   (`controller/<bus-slug>/…`). **Multiple controllers** may send to the same UDP listener; all are
   on the same logical bus. Distinguish sources using **`trace`** fields on published JSON (below).
 
@@ -952,16 +1002,16 @@ not committed; **`hambridge.lpr`** in `src/` is the program entry source.
 ```
 /Makefile                      # also downloads prof7bit/fpc-mqtt-client (pinned zip + SHA256) into build/deps/
 /README.md
-/INSTALL.md
-/DEVELOPING.md
-/ConfigurationGuide.md
+/docs/user/INSTALL.md
+/docs/developers/DEVELOPING.md
+/docs/user/ConfigurationGuide.md
 /.gitignore
 /LICENSE                       # GPL-3.0-or-later
-/Specification.md              # this file (architecture + spec)
+/docs/developers/Specification.md   # this file (architecture + spec)
 /CHANGELOG.md                  # release notes (human-oriented)
 /ROADMAP.md                    # backlog / planned work
-/bridge.json.example
-/devices.json.example
+/config/hambridge.yaml.example
+/config/mappings/visca.yaml.example
 /packaging/README.md             # systemd, sysusers, tmpfiles, udev templates
 /packaging/systemd/hambridge.service
 /packaging/systemd/sysusers.d/hambridge.conf
@@ -972,26 +1022,27 @@ not committed; **`hambridge.lpr`** in `src/` is the program entry source.
 /debian                         # symlink → packaging/debian (dpkg-buildpackage expects ./debian)
 /src/
   hambridge.lpr                # program entry point
-  config.pas                   # bridge.json loader + env override
-  devicesconfig.pas            # devices.json loader (buses/devices/evdev inputs)
+  config.pas                   # hambridge.yaml: bridge subtree + discovery + BRIDGE_* env override
+  devicesconfig.pas            # hambridge.yaml: buses, devices[], evdev, device_mappings (VISCA path)
   logger.pas                   # stdout text logger (info/warn/error/debug)
   libevdev_binding.pas         # cdecl externs for libevdev (linked via -l:libevdev.so.2)
   evdevreader.pas              # opens /dev/input/event*, polls, emits records
   mqttpublisher.pas            # wraps prof7bit/fpc-mqtt-client; LWT + birth + device/# subscribe
   mainloop.pas                 # poll() over evdev fds + MQTT tick + VISCA router tick
   serialport.pas               # Linux serial TX (stty + fpOpen/fpWrite)
-  viscamapping.pas             # visca-mapping.json encode + controller-packet reverse decode
+  viscamapping.pas             # VISCA map file (device_mappings.visca): encode + controller decode
   viscareplydecode.pas         # device reply → JSON decode fragment for telemetry/status
   commandrouter.pas            # MQTT device/# → queued VISCA TX per bus; status/telemetry/events
 ```
 
 Unit responsibilities:
 
-* **`hambridge.lpr`** — argument parsing (`--config`, `--devices`, `--help`,
-  `--version`), top-level wiring, signal handling (`SIGTERM` graceful shutdown).
-* **`config.pas`** — load `bridge.json`, apply `BRIDGE_*` env overrides, validate. Path
-  discovery as in §3.0.
-* **`devicesconfig.pas`** — load `devices.json` (buses, devices, optional evdev inputs).
+* **`hambridge.lpr`** — argument parsing (`--config`, `--help`, `--version`), top-level wiring,
+  signal handling (`SIGTERM` graceful shutdown).
+* **`config.pas`** — load **`hambridge.yaml`**, apply `BRIDGE_*` env overrides to the **`bridge`**
+  subtree, validate. Path discovery as in §3.0.
+* **`devicesconfig.pas`** — parse **`buses`**, top-level **`devices`** sequence, **`evdev`**, and
+  **`device_mappings`** from the same loaded document as **`bridge`**.
 * **`logger.pas`** — global logger, level-filtered, plain text to stdout. No external deps.
 * **`libevdev_binding.pas`** — minimal `cdecl; external name '<symbol>'` declarations (one
   quoted linker symbol per function, e.g. `libevdev_new`) for:
@@ -1018,23 +1069,22 @@ Unit responsibilities:
   strip after link).
 * **`make clean`** — removes `./build/` (including downloaded MQTT sources) and stray `.o` /
   `.ppu` files.
-* **`make run`** — convenience target: `./build/hambridge --config ./bridge.json
-  --devices ./devices.json`.
+* **`make run`** — convenience target: build (if needed), seed **`config/*.yaml`** from **`*.example`**
+  when missing, then run **`./build/hambridge --config ./config/hambridge.yaml`** (explicit **`--config`**;
+  not relying on discovery). See **`docs/developers/DEVELOPING.md`**.
 * **`make raspbian-help`** — prints install hints for **Raspberry Pi OS / Debian** native builds
   (`fpc`, FCL units, `libevdev-dev`, …). Full notes: **`packaging/raspbian/README.md`**.
 * **`make debian-deb`** — on **Debian / Raspberry Pi OS**, runs **`dpkg-buildpackage`** using
   **`packaging/debian/`** (exposed as **`./debian`** via symlink); produces **`../hambridge_<ver>_<arch>.deb`**.
   See **`packaging/raspbian/README.md`**.
-* **`make install`** *(optional)* — install binary to `/usr/local/bin` and example configs to
-  `/etc/hambridge/`.
+* **`make install`** *(optional)* — install binary to `/usr/local/bin` and example configs under
+  **`/etc/hambridge/config/`** (if implemented; match **`config/`** layout in the repository).
 
 ### Example config files
 
-* **`bridge.json.example`** — annotated copy of the §3.0 example, with `mqtt.host` =
-  `localhost`, no auth, no TLS, `log.level` = `info`.
-* **`devices.json.example`** — minimal config: empty `buses` and `devices` arrays plus an
-  `evdev` block with `enabled` true, one input pointing at `/dev/input/event0` (edit to a node
-  you can read), and `mqttTopic` = `evdev/example/event`.
+* **`config/hambridge.yaml.example`** — template with **`bridge`**, **`device_mappings`**, **`buses`**,
+  **`devices`**, **`evdev`** (§3.0–§3.1).
+* **`config/mappings/visca.yaml.example`** — minimal **`models`** / **`topics`** illustration for VISCA encode.
 
 ### Runtime prerequisites
 
@@ -1043,7 +1093,7 @@ Unit responsibilities:
 * The bridge process must have read access to the configured `/dev/input/event*` nodes.
   **systemd deployments** should use an unprivileged service user (`hambridge`) plus **narrow
   udev rules** from `packaging/udev/` (preferred over adding that user to the broad `input` group).
-  See [README.md](README.md) and [packaging/README.md](packaging/README.md).
+  See [README.md](../../README.md) and [packaging/README.md](../../packaging/README.md).
 
 ---
 
@@ -1054,7 +1104,9 @@ HaMBridge has a small dependency footprint:
 * **MQTT client**: **`prof7bit/fpc-mqtt-client`** (preferred) — pure Pascal MQTT client; not
   committed in-tree. `make` downloads a tag-pinned zip, checks **SHA256**, and unpacks under
   `./build/deps/` (see `Makefile`).
-* **JSON**: `fpjson` + `jsonparser` (FCL, ships with FPC).
+* **JSON**: `fpjson` + `jsonparser` (FCL, ships with FPC) — MQTT payloads and internal JSON helpers.
+* **YAML**: third-party library for **`hambridge.yaml`** and the VISCA mapping file (see §3.0.2);
+  not hand-rolled.
 * **Free Pascal Compiler**: 3.2.x or newer.
 * **libevdev** (Linux only): linked at build time as `-l:libevdev.so.2` (runtime SONAME; no
   unversioned `.so` symlink required).

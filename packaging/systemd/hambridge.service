@@ -7,8 +7,8 @@ Wants=network-online.target
 Type=simple
 User=hambridge
 Group=hambridge
-# Config paths — adjust if your distro uses a different layout.
-ExecStart=/usr/bin/hambridge --config /etc/hambridge/bridge.json --devices /etc/hambridge/devices.json
+# Config path — adjust if your distro uses a different layout.
+ExecStart=/usr/bin/hambridge --config /etc/hambridge/config/hambridge.yaml
 Restart=on-failure
 RestartSec=5
 

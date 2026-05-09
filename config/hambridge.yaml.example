@@ -1,0 +1,71 @@
+# HaMBridge — single YAML configuration (v0.4.0+).
+# Copy to config/hambridge.yaml and edit. From a clone, run with an explicit path, e.g.:
+#   ./build/hambridge --config ./config/hambridge.yaml
+# Default discovery does not load ./config/hambridge.yaml by itself.
+# Top-level keys: bridge, device_mappings, buses, devices, evdev.
+# v0.4.1+: each bus uses transport, transport_configuration, protocol, and optional protocol_config.
+
+bridge:
+  mqtt:
+    host: localhost
+    port: 1883
+    tls: false
+    username: null
+    password: null
+    clientId: hambridge
+    keepaliveSec: 30
+    lwt:
+      topic: bridge/hambridge/status
+      payload: offline
+      retain: true
+      qos: 1
+    birth:
+      topic: bridge/hambridge/status
+      payload: online
+      retain: true
+      qos: 1
+  log:
+    level: info
+    format: text
+
+device_mappings:
+  visca: mappings/visca.yaml
+
+buses:
+  rs485-1:
+    transport: serial
+    protocol: visca
+    protocol_config: {}
+    transport_configuration:
+      port: /dev/ttyUSB0
+      baud: 9600
+      dataBits: 8
+      parity: "N"
+      stopBits: 1
+  visca-udp-1:
+    transport: udp
+    protocol: visca
+    protocol_config: {}
+    transport_configuration:
+      bindHost: "0.0.0.0"
+      bindPort: 52381
+      allowFrom: ["192.0.2.0/24"]
+      defaultUdpHost: null
+      defaultUdpPort: null
+
+devices:
+  - slug: camera_stage
+    model: marshall-cv344
+    bus: rs485-1
+    viscaAddress: 1
+    scheduler:
+      minInterCommandMs: 50
+      maxQueueDepth: 50
+
+evdev:
+  enabled: true
+  inputs:
+    - slug: example_keypad
+      deviceNode: /dev/input/event0
+      grabExclusive: false
+      mqttTopic: evdev/example_keypad/event

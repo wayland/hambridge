@@ -23,6 +23,11 @@ If you are not using distro packages, follow the ordered checklist in `packaging
 - install the `hambridge` binary
 - install sysusers/tmpfiles snippets (user + state dir)
 - install a **narrow** udev rule for only the intended input devices
-- install `/etc/hambridge/bridge.json` and `/etc/hambridge/devices.json`
+- install configuration under **`/etc/hambridge/config/`**: **`hambridge.yaml`** (**`bridge`**,
+  **`device_mappings`**, **`buses`**, **`devices`**, **`evdev`**) plus **`mappings/visca.yaml`**
+  (or the path set in **`device_mappings.visca`**). Use the **`*.example`** files under **`config/`** in the source
+  tree as templates only; installed paths match **`/etc/…`**, not the checkout. The shipped **`hambridge.service`**
+  passes **`--config /etc/hambridge/config/hambridge.yaml`**. For runs from a source tree without installing,
+  use **`--config`** or **`BRIDGE_CONFIG`** (see **[ConfigurationGuide.md](ConfigurationGuide.md)** in this folder).
 - enable and start `hambridge.service`
 

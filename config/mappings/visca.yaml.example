@@ -1,0 +1,21 @@
+# VISCA topic → wire mapping (YAML). Path is set in config/hambridge.yaml as device_mappings.visca
+# (convention: mappings/visca.yaml next to hambridge.yaml). Copy to config/mappings/visca.yaml.
+# Wire order: [device] = 0x80 + viscaAddress from hambridge.yaml top-level devices[], then hex bytes,
+# then one byte per template slot, then FF. Template keys match MQTT JSON (case-insensitive).
+
+models:
+  base-visca:
+    topics:
+      power/on:
+        bytes: "01 04 00"
+        template: [powerArgument]
+        variables: { powerArgument: "02" }
+      power/off:
+        bytes: "01 04 00 03"
+  marshall-cv344:
+    inherits: base-visca
+    topics:
+      preset/call:
+        bytes: "01 04 3F 02"
+        template: [presetIndex]
+        variables: { presetIndex: "01" }

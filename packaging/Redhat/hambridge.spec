@@ -87,7 +87,7 @@ install -Dpm0644 packaging/udev/70-hambridge-input.rules \
 
 %files
 %license LICENSE
-%doc README.md INSTALL.md DEVELOPING.md Specification.md ConfigurationGuide.md bridge.json.example devices.json.example
+%doc README.md docs/user/INSTALL.md docs/developers/DEVELOPING.md docs/developers/Specification.md docs/user/ConfigurationGuide.md config/hambridge.yaml.example config/mappings/visca.yaml.example
 
 %{_bindir}/hambridge
 

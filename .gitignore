@@ -36,6 +36,17 @@ lib/
 # Local config (commit only the .example variants)
 /bridge.json
 /devices.json
+/visca-mapping.json
+/hambridge.yaml
+/hambridge.yml
+/visca-mapping.yaml
+/visca-mapping.yml
+/mappings/visca.yaml
+/mappings/visca.yml
+/config/hambridge.yaml
+/config/hambridge.yml
+/config/mappings/visca.yaml
+/config/mappings/visca.yml
 
 # Editor / OS noise
 .vscode/

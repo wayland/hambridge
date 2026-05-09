@@ -25,6 +25,7 @@ Description: Hardware-MQTT Bridge (evdev and VISCA over MQTT)
  events to MQTT and, when configured, subscribes to MQTT device control topics and
  sends VISCA over serial (RS-232 / RS-485).
  .
- Configuration lives in /etc/hambridge/ (bridge.json, devices.json). The shipped
+ Configuration lives in /etc/hambridge/config/ (hambridge.yaml + mappings/visca.yaml per
+ device_mappings.visca). The shipped
  systemd unit runs as user "hambridge"; create config and udev rules per the
  upstream packaging/ documentation.
