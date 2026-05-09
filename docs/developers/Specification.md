@@ -302,12 +302,12 @@ Alongside **`bridge`**, the process config file defines:
   **`device`** vs **`controller`**, wire **`bus`**, and for controllers **`match.protocol`**: **`evdev`**
   or **`visca`**). See **Normative endpoints schema** below.
 
-#### Normative bus entry schema (v0.4.1+)
+#### Normative bus entry schema
 
 Each value under **`buses.<bus-slug>`** is a mapping with:
 
 * **`transport`** (required): wire transport identifier. For **`protocol: visca`**, **`serial`** or
-  **`udp`** as in §3.4. For **`protocol: evdev`** (Linux input bus; v0.4.3+), **`transport`** **must**
+  **`udp`** as in §3.4. For **`protocol: evdev`** (Linux input bus), **`transport`** **must**
   be **`none`** and **`transport_configuration`** **must** be **`{}`** (no TTY or UDP socket).
 * **`transport_configuration`** (required): mapping whose **keys depend on `transport`** (serial
   vs UDP field sets are defined in §3.4). For **`transport: none`**, use an **empty** mapping **`{}`**.
@@ -331,7 +331,7 @@ logical bus). **Controller MQTT topics** use the **endpoint `slug`**, not the bu
   listen socket **`bindHost`/`bindPort`** (ports **must** not conflict on the host).
 * **`transport: serial`**: **`transport_configuration.port`** (and related serial fields) per §3.4.
 
-#### Normative endpoints schema (v0.4.2+; evdev folded in v0.4.3+)
+#### Normative endpoints schema
 
 The top-level **`endpoints`** key is a **sequence** (YAML array); each element is one **endpoint**
 object. Per-field rules are summarized in the table below. Unknown keys under **`match`** (and other
@@ -602,7 +602,7 @@ For example, a controller-derived "pan left" event could be represented as:
 * Topic: `device/camera_stage/pan`
 * Payload: `{ "dir": "left", "speed": 10 }`
 
-## 3.1.2 Linux evdev (controller endpoints, v0.4.3+)
+## 3.1.2 Linux evdev (controller endpoints)
 
 **Linux-only** capability: each **`endpoint_type: controller`** endpoint with **`match.protocol: evdev`**
 opens **`match.deviceNode`** via **`libevdev`** (linked as `-l:libevdev.so.2`, see §6), reads kernel
@@ -923,7 +923,7 @@ Attribute that frame to the unique **`endpoint_type: device`** endpoint with:
 Then run the same device-reply decode and publish pipeline as serial for **`device/<slug>/telemetry`** and
 **`device/<slug>/status`**.
 
-**NAT / asymmetric paths (v0.4.4):** the **remoteHost/remotePort must-match** rule is strict — deployments
+**NAT / asymmetric paths:** the **remoteHost/remotePort must-match** rule is strict — deployments
 where return traffic does not match the configured remote **will not** correlate; relaxing that is a
 later spec change.
 
@@ -967,7 +967,7 @@ exact default is implementation-defined). No trailing bytes after `0xFF` in the 
 * **Oversized datagram:** drop or truncate per implementation policy; must be documented and must not
   crash the process.
 
-These datagram rules are **normative** for v0.4.4+ UDP VISCA interoperability (“be conservative in what
+These datagram rules are **normative** for UDP VISCA interoperability (“be conservative in what
 you send, liberal in what you accept”).
 
 #### Frame handling (receive)
