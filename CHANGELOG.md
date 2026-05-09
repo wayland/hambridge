@@ -14,6 +14,12 @@ Notable changes to **HaMBridge** (this repository). Release history for packagin
 
 - **Endpoints loader** — VISCA devices are loaded from `endpoints[]` with `match.endpoint_type: device`, using `match.bus` and `match.deviceID` (replacing the legacy `devices[]` stanza). Evdev inputs are loaded as `match.endpoint_type: controller` with `match.protocol: evdev` and default publish topic `controller/<slug>/event`.
 
+## [0.4.3] — 2026-05-09
+
+### Changed
+
+- **Evdev endpoints enforcement** — Linux input is configured via an `evdev` bus (`transport: none`, `protocol: evdev`, `protocol_config.enabled: true`) and `endpoints[]` controller rows (`match.protocol: evdev`). Validation now enforces `protocol_config.enabled: true` for evdev buses.
+
 ## [0.4.0] — 2026-05-09
 
 ### Changed

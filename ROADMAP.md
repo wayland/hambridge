@@ -74,8 +74,15 @@ This file lists **planned or deferred work** compared to [`docs/developers/Speci
 
 ## v0.4.3 — Evdev → Endpoints
 
-- The "evdev" section of the config file should be rolled into the "endpoints" section, and each input should become a "controller" device.  
-- The match section should allow a "deviceNode" option, but there should be other ways of matching too.  
+**Shipped:** Linux input is configured via an **`evdev` bus** (`transport: none`, `protocol: evdev`,
+`protocol_config.enabled: true`) plus **controller endpoints** under **`endpoints[]`** with
+`match.endpoint_type: controller`, `match.protocol: evdev`, and `match.deviceNode`.
+
+### Evdev → Endpoints Checklist
+
+- [x] Add `buses.<id>` entries with `protocol: evdev` and `transport: none`.
+- [x] Load each input as an endpoint (`match.protocol: evdev`) and publish to `controller/<slug>/event`.
+- [x] Validate evdev buses require `protocol_config.enabled: true`.
 
 ## v0.4.4 — VISCA over UDP
 

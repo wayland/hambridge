@@ -278,7 +278,7 @@ begin
   FItems.Clear;
 end;
 
-{ Creates one TEvdevInput per evdev.inputs row when evdev.enabled (caller already validated v0.1 policy). }
+{ Creates one TEvdevInput per controller/evdev endpoint (endpoints[]). }
 procedure TEvdevHub.AddFromConfig(const Dev: TDevicesConfig);
 var
   I: Integer;

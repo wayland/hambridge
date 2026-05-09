@@ -17,7 +17,7 @@
 %global fpc_mqtt_sha256  702ded75607d2ba8429fffc3509bbb7607466be9596bc23d8bd73c13f8e74214
 
 Name:           hambridge
-Version:        0.4.2
+Version:        0.4.3
 Release:        1%{?dist}
 Summary:        HaMBridge — Linux evdev to MQTT bridge (Free Pascal)
 

@@ -1,8 +1,8 @@
 unit devicesconfig;
 
 {
-  Loads buses, devices[], evdev, device_mappings from hambridge.yaml (plan §3.1).
-  VISCA devices use slug + viscaAddress (1..7).
+  Loads buses, endpoints, and device_mappings from hambridge.yaml (plan §3.1).
+  VISCA devices use slug + deviceID (1..7).
 }
 
 {$mode ObjFPC}{$H+}
@@ -44,7 +44,10 @@ type
     Id: string;
     Transport: string;
     Protocol: string;
-    ProtocolConfig: TJSONObject; { shallow reference while loading; not stored long-term }
+    { Snapshot of the protocol_config subtree (we cannot keep JSON pointers because the parse tree is freed). }
+    HasProtocolConfig: Boolean;
+    ProtocolConfigHasEnabled: Boolean;
+    ProtocolConfigEnabled: Boolean;
   end;
 
   TViscaDeviceConfig = record
@@ -255,7 +258,7 @@ var
   BObj: TJSONObject;
   I: Integer;
   Name: string;
-  Row: TJSONObject;
+  Row, Pc: TJSONObject;
 begin
   SetLength(Meta, 0);
   BObj := ObjGetObjectCI(Root, 'buses');
@@ -271,9 +274,19 @@ begin
     Meta[I].Id := Name;
     Meta[I].Transport := LowerCase(Trim(JsonGetString(Row, 'transport', '')));
     Meta[I].Protocol := LowerCase(Trim(JsonGetString(Row, 'protocol', '')));
-    Meta[I].ProtocolConfig := nil;
-    if ObjFindCI(Row, 'protocol_config') is TJSONObject then
-      Meta[I].ProtocolConfig := TJSONObject(ObjFindCI(Row, 'protocol_config'));
+    Meta[I].HasProtocolConfig := False;
+    Meta[I].ProtocolConfigHasEnabled := False;
+    Meta[I].ProtocolConfigEnabled := False;
+    Pc := ObjGetObjectCI(Row, 'protocol_config');
+    if Pc <> nil then
+    begin
+      Meta[I].HasProtocolConfig := True;
+      if ObjFindCI(Pc, 'enabled') <> nil then
+      begin
+        Meta[I].ProtocolConfigHasEnabled := True;
+        Meta[I].ProtocolConfigEnabled := JsonGetBool(Pc, 'enabled', False);
+      end;
+    end;
   end;
 end;
 
@@ -285,13 +298,6 @@ begin
     if SameText(Meta[I].Id, BusId) then
       Exit(I);
   Result := -1;
-end;
-
-function BusMetaBool(const M: TBusMeta; const Key: string; Default: Boolean): Boolean;
-begin
-  if M.ProtocolConfig = nil then
-    Exit(Default);
-  Result := JsonGetBool(M.ProtocolConfig, Key, Default);
 end;
 
 procedure LoadEndpoints(Root: TJSONObject; const Meta: TBusMetaDyn; out Devs: TViscaDeviceDyn; out Inputs: TEvdevInputDyn;
@@ -382,7 +388,11 @@ begin
       begin
         if not SameText(Meta[BusIx].Protocol, 'evdev') then
           raise Exception.Create('hambridge.yaml: controller endpoint "' + Slug + '" protocol evdev requires an evdev bus');
-        if not BusMetaBool(Meta[BusIx], 'enabled', True) then
+        if not SameText(Meta[BusIx].Transport, 'none') then
+          raise Exception.Create('hambridge.yaml: controller endpoint "' + Slug + '" protocol evdev requires a bus with transport "none"');
+        if (not Meta[BusIx].HasProtocolConfig) or (not Meta[BusIx].ProtocolConfigHasEnabled) then
+          raise Exception.Create('hambridge.yaml: evdev bus "' + BusId + '" must set protocol_config.enabled: true');
+        if not Meta[BusIx].ProtocolConfigEnabled then
           raise Exception.Create('hambridge.yaml: controller endpoint "' + Slug + '" references evdev bus "' + BusId + '" but protocol_config.enabled is false');
         FillChar(Inp, SizeOf(Inp), 0);
         Inp.Slug := Slug;
@@ -444,6 +454,19 @@ procedure ValidateDevicesConfig(const D: TDevicesConfig);
 var
   I, J: Integer;
 begin
+  for I := 0 to High(D.BusMeta) do
+  begin
+    if SameText(D.BusMeta[I].Protocol, 'evdev') then
+    begin
+      if not SameText(D.BusMeta[I].Transport, 'none') then
+        raise Exception.Create('hambridge.yaml: evdev bus "' + D.BusMeta[I].Id + '" must use transport "none"');
+      if (not D.BusMeta[I].HasProtocolConfig) or (not D.BusMeta[I].ProtocolConfigHasEnabled) then
+        raise Exception.Create('hambridge.yaml: evdev bus "' + D.BusMeta[I].Id + '" must set protocol_config.enabled: true');
+      if not D.BusMeta[I].ProtocolConfigEnabled then
+        raise Exception.Create('hambridge.yaml: evdev bus "' + D.BusMeta[I].Id + '" protocol_config.enabled must be true');
+    end;
+  end;
+
   if (Length(D.ViscaDevices) > 0) and (Length(D.Buses) = 0) then
     raise Exception.Create('hambridge.yaml: VISCA devices require at least one bus in "buses"');
   for I := 0 to High(D.ViscaDevices) do

@@ -1,3 +1,10 @@
+hambridge (0.4.3-1) unstable; urgency=medium
+
+  * v0.4.3: evdev → endpoints (require evdev bus protocol_config.enabled: true; controller endpoints use
+    controller/<slug>/event); tighten bus validation.
+
+ -- Tim Nelson <wayland@wayland.id.au>  Sat, 09 May 2026 10:15:00 +0000
+
 hambridge (0.4.2-1) unstable; urgency=medium
 
   * v0.4.2: endpoints config loader (endpoints[].match for VISCA devices and evdev controller endpoints);
