@@ -15,9 +15,9 @@ type
   { Severity ordering matches Ord() for filtering: only messages >= GLevel are printed. }
   TLogLevel = (llDebug, llInfo, llWarn, llError);
 
-{ Sets global minimum level from bridge.json "log.level" after startup. }
+{ Sets global minimum level from hambridge.yaml bridge.log.level after startup. }
 procedure LogInit(ALevel: TLogLevel);
-{ Maps bridge.json string (debug/info/warn/error) to TLogLevel; unknown -> info. }
+{ Maps log level string (debug/info/warn/error) to TLogLevel; unknown -> info. }
 function LogLevelFromString(const S: string): TLogLevel;
 { Writes one line to stdout if Level is enabled. }
 procedure Log(const Level: TLogLevel; const Msg: string);

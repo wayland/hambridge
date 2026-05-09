@@ -20,7 +20,7 @@ type
   { One configured input device: holds libevdev context, handles open/reopen with backoff. }
   TEvdevInput = class
   private
-    FCfg: TEvdevInputConfig;  { Copy of devices.json row for this input }
+    FCfg: TEvdevInputConfig;  { Copy of hambridge.yaml evdev.inputs[] row for this input }
     FDev: Plibevdev;          { Opaque libevdev handle; nil when closed }
     FFd: cint;                { Non-blocking O_RDONLY fd for poll; -1 when closed }
     FBackoffMs: Cardinal;     { Current reopen delay; doubles on failure up to cap }
@@ -38,7 +38,7 @@ type
     property Cfg: TEvdevInputConfig read FCfg;
   end;
 
-  { Owns all TEvdevInput instances created from devices.json; aggregates fds for the main loop. }
+  { Owns all TEvdevInput instances created from hambridge.yaml; aggregates fds for the main loop. }
   TEvdevHub = class
   private
     FItems: TFPList;  { List of TEvdevInput pointers }

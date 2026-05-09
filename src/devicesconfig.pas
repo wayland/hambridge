@@ -1,7 +1,8 @@
 unit devicesconfig;
 
 {
-  Loads devices.json (plan §3.1): evdev inputs use slug; VISCA devices use slug + viscaAddress (1..7).
+  Loads buses, devices[], evdev, device_mappings from hambridge.yaml (plan §3.1).
+  VISCA devices use slug + viscaAddress (1..7).
 }
 
 {$mode ObjFPC}{$H+}
@@ -9,7 +10,7 @@ unit devicesconfig;
 interface
 
 uses
-  SysUtils, Classes, fpjson, jsonparser;
+  SysUtils, Classes, fpjson;
 
 type
   TEvdevInputConfig = record
@@ -61,17 +62,16 @@ type
     ViscaMappingPath: string;
   end;
 
-function FindDevicesConfigPath(const CliPath: string): string;
 function LoadDevicesConfig(const Path: string): TDevicesConfig;
 { Raises if evdev or VISCA sections are internally inconsistent. }
 procedure ValidateDevicesConfig(const D: TDevicesConfig);
-{ Resolves visca-mapping.json: env BRIDGE_VISCA_MAPPING, devices.viscaMapping, beside devices.json, cwd, /etc/hambridge. }
-function DiscoverViscaMappingPath(const DevicesJsonPath: string; const D: TDevicesConfig): string;
+{ Resolves VISCA mapping: BRIDGE_VISCA_MAPPING, device_mappings.visca (relative to main config dir), defaults. }
+function DiscoverViscaMappingPath(const MainConfigPath: string; const D: TDevicesConfig): string;
 
 implementation
 
 uses
-  jsonutil, Math;
+  jsonutil, Math, yamlmin;
 
 function PathIsAbsolute(const P: string): Boolean;
 begin
@@ -81,19 +81,6 @@ end;
 function FileExistsReadable(const Path: string): Boolean;
 begin
   Result := (Path <> '') and FileExists(Path);
-end;
-
-function FindDevicesConfigPath(const CliPath: string): string;
-begin
-  if FileExistsReadable(CliPath) then
-    Exit(CliPath);
-  if FileExistsReadable(GetEnvironmentVariable('BRIDGE_DEVICES')) then
-    Exit(GetEnvironmentVariable('BRIDGE_DEVICES'));
-  if FileExistsReadable('devices.json') then
-    Exit('devices.json');
-  if FileExistsReadable('/etc/hambridge/devices.json') then
-    Exit('/etc/hambridge/devices.json');
-  Result := '';
 end;
 
 function JsonGetString(Obj: TJSONObject; const Key: string; const Default: string = ''): string;
@@ -151,14 +138,14 @@ var
 begin
   Result := Trim(JsonGetString(Obj, 'slug', ''));
   if Result = '' then
-    raise Exception.Create('devices.json: ' + Context + ' needs non-empty "slug"');
+    raise Exception.Create('hambridge.yaml: ' + Context + ' needs non-empty "slug"');
   if Pos('/', Result) > 0 then
-    raise Exception.Create('devices.json: ' + Context + ' slug must not contain "/"');
+    raise Exception.Create('hambridge.yaml: ' + Context + ' slug must not contain "/"');
   for I := 1 to Length(Result) do
   begin
     c := Result[I];
     if not (c in ['a'..'z', 'A'..'Z', '0'..'9', '_', '-']) then
-      raise Exception.Create('devices.json: ' + Context + ' slug may only use letters, digits, underscore, hyphen');
+      raise Exception.Create('hambridge.yaml: ' + Context + ' slug may only use letters, digits, underscore, hyphen');
   end;
 end;
 
@@ -177,7 +164,8 @@ var
   BObj: TJSONObject;
   I: Integer;
   Name: string;
-  Row, Rs485Obj: TJSONObject;
+  Row, Rs485Obj, Tc: TJSONObject;
+  Transport: string;
 begin
   SetLength(Buses, 0);
   BObj := ObjGetObjectCI(Root, 'buses');
@@ -189,15 +177,39 @@ begin
     Name := BObj.Names[I];
     Buses[I].Id := Name;
     if not (BObj.Items[I] is TJSONObject) then
-      raise Exception.Create('devices.json: buses.' + Name + ' must be an object');
+      raise Exception.Create('hambridge.yaml: buses.' + Name + ' must be an object');
     Row := TJSONObject(BObj.Items[I]);
-    Buses[I].Port := JsonGetString(Row, 'port', '');
-    Buses[I].Baud := JsonGetInt(Row, 'baud', 9600);
-    Buses[I].DataBits := JsonGetInt(Row, 'dataBits', 8);
-    Buses[I].Parity := JsonGetChar(Row, 'parity', 'N');
-    Buses[I].StopBits := JsonGetInt(Row, 'stopBits', 1);
-    FillChar(Buses[I].Rs485, SizeOf(Buses[I].Rs485), 0);
-    Rs485Obj := ObjGetObjectCI(Row, 'rs485');
+    Transport := LowerCase(Trim(JsonGetString(Row, 'transport', '')));
+    if Transport = '' then
+      Transport := 'serial';
+    if SameText(Transport, 'udp') then
+      raise Exception.Create('hambridge.yaml: bus "' + Name +
+        '" uses UDP (not implemented in this build; use transport: serial or remove UDP buses)');
+    if not SameText(Transport, 'serial') then
+      raise Exception.Create('hambridge.yaml: bus "' + Name + '" has unsupported transport "' +
+        JsonGetString(Row, 'transport', '') + '" (supported: serial)');
+
+    Tc := ObjGetObjectCI(Row, 'transport_configuration');
+    if Tc <> nil then
+    begin
+      Buses[I].Port := JsonGetString(Tc, 'port', '');
+      Buses[I].Baud := JsonGetInt(Tc, 'baud', 9600);
+      Buses[I].DataBits := JsonGetInt(Tc, 'dataBits', 8);
+      Buses[I].Parity := JsonGetChar(Tc, 'parity', 'N');
+      Buses[I].StopBits := JsonGetInt(Tc, 'stopBits', 1);
+      FillChar(Buses[I].Rs485, SizeOf(Buses[I].Rs485), 0);
+      Rs485Obj := ObjGetObjectCI(Tc, 'rs485');
+    end
+    else
+    begin
+      Buses[I].Port := JsonGetString(Row, 'port', '');
+      Buses[I].Baud := JsonGetInt(Row, 'baud', 9600);
+      Buses[I].DataBits := JsonGetInt(Row, 'dataBits', 8);
+      Buses[I].Parity := JsonGetChar(Row, 'parity', 'N');
+      Buses[I].StopBits := JsonGetInt(Row, 'stopBits', 1);
+      FillChar(Buses[I].Rs485, SizeOf(Buses[I].Rs485), 0);
+      Rs485Obj := ObjGetObjectCI(Row, 'rs485');
+    end;
     if Rs485Obj <> nil then
     begin
       Buses[I].Rs485.Enabled := JsonGetBool(Rs485Obj, 'enabled', False);
@@ -207,7 +219,7 @@ begin
       Buses[I].Rs485.DelayRtsAfterSend := Cardinal(Max(0, JsonGetInt(Rs485Obj, 'delayRtsAfterSend', 0)));
     end;
     if Buses[I].Port = '' then
-      raise Exception.Create('devices.json: bus "' + Name + '" needs port');
+      raise Exception.Create('hambridge.yaml: bus "' + Name + '" needs transport_configuration.port (or legacy port)');
   end;
 end;
 
@@ -227,14 +239,14 @@ begin
   for I := 0 to Arr.Count - 1 do
   begin
     if not (Arr.Items[I] is TJSONObject) then
-      raise Exception.Create('devices.json: devices[' + IntToStr(I) + '] must be an object');
+      raise Exception.Create('hambridge.yaml: devices[' + IntToStr(I) + '] must be an object');
     Item := TJSONObject(Arr.Items[I]);
     Devs[I].Slug := JsonGetRequiredSlug(Item, 'VISCA device[' + IntToStr(I) + ']');
     Devs[I].Model := JsonGetString(Item, 'model', '');
     Devs[I].BusId := JsonGetString(Item, 'bus', '');
     addr := JsonGetInt(Item, 'viscaAddress', -1);
     if (addr < 1) or (addr > 7) then
-      raise Exception.Create('devices.json: VISCA device slug "' + Devs[I].Slug + '" needs integer viscaAddress in 1..7');
+      raise Exception.Create('hambridge.yaml: VISCA device slug "' + Devs[I].Slug + '" needs integer viscaAddress in 1..7');
     Devs[I].ViscaAddress := Byte(addr);
     Devs[I].MinInterCommandMs := 40;
     Devs[I].MaxQueueDepth := 50;
@@ -263,44 +275,37 @@ begin
       end;
     end;
     if Devs[I].Model = '' then
-      raise Exception.Create('devices.json: VISCA device slug "' + Devs[I].Slug + '" needs model');
+      raise Exception.Create('hambridge.yaml: VISCA device slug "' + Devs[I].Slug + '" needs model');
     if Devs[I].BusId = '' then
-      raise Exception.Create('devices.json: VISCA device slug "' + Devs[I].Slug + '" needs bus');
+      raise Exception.Create('hambridge.yaml: VISCA device slug "' + Devs[I].Slug + '" needs bus');
   end;
 end;
 
 function LoadDevicesConfig(const Path: string): TDevicesConfig;
 var
-  Parser: TJSONParser;
-  Stream: TFileStream;
   Data: TJSONData;
-  Root, Ev: TJSONObject;
+  Root, Ev, Dm: TJSONObject;
   Arr: TJSONArray;
   I: Integer;
   Item: TJSONObject;
 begin
   FillChar(Result, SizeOf(Result), 0);
-  Stream := TFileStream.Create(Path, fmOpenRead or fmShareDenyWrite);
-  try
-    Parser := TJSONParser.Create(Stream);
-    try
-      Data := Parser.Parse;
-    finally
-      Parser.Free;
-    end;
-  finally
-    Stream.Free;
-  end;
+  Data := YamlFileToJsonData(Path);
   if not (Data is TJSONObject) then
   begin
     Data.Free;
-    raise Exception.Create('devices.json: root must be an object');
+    raise Exception.Create('hambridge.yaml: root must be an object');
   end;
   Root := TJSONObject(Data);
   try
     LoadBuses(Root, Result.Buses);
     LoadViscaDevices(Root, Result.ViscaDevices);
-    Result.ViscaMappingPath := JsonGetString(Root, 'viscaMapping', '');
+    Result.ViscaMappingPath := '';
+    Dm := ObjGetObjectCI(Root, 'device_mappings');
+    if Dm <> nil then
+      Result.ViscaMappingPath := JsonGetString(Dm, 'visca', '');
+    if Result.ViscaMappingPath = '' then
+      Result.ViscaMappingPath := JsonGetString(Root, 'viscaMapping', '');
     if Result.ViscaMappingPath = '' then
       Result.ViscaMappingPath := JsonGetString(Root, 'visca_mapping', '');
 
@@ -314,20 +319,20 @@ begin
     begin
       Result.EvdevEnabled := JsonGetBool(Ev, 'enabled', False);
       if not (ObjFindCI(Ev, 'inputs') is TJSONArray) then
-        raise Exception.Create('devices.json: evdev.inputs must be an array');
+        raise Exception.Create('hambridge.yaml: evdev.inputs must be an array');
       Arr := TJSONArray(ObjFindCI(Ev, 'inputs'));
       SetLength(Result.EvdevInputs, Arr.Count);
       for I := 0 to Arr.Count - 1 do
       begin
         if not (Arr.Items[I] is TJSONObject) then
-          raise Exception.Create('devices.json: evdev.inputs[' + IntToStr(I) + '] must be an object');
+          raise Exception.Create('hambridge.yaml: evdev.inputs[' + IntToStr(I) + '] must be an object');
         Item := TJSONObject(Arr.Items[I]);
         Result.EvdevInputs[I].Slug := JsonGetRequiredSlug(Item, 'evdev.inputs[' + IntToStr(I) + ']');
         Result.EvdevInputs[I].DeviceNode := JsonGetString(Item, 'deviceNode', '');
         Result.EvdevInputs[I].GrabExclusive := JsonGetBool(Item, 'grabExclusive', False);
         Result.EvdevInputs[I].MqttTopic := JsonGetString(Item, 'mqttTopic', '');
         if Result.EvdevInputs[I].DeviceNode = '' then
-          raise Exception.Create('devices.json: evdev input "' + Result.EvdevInputs[I].Slug + '" needs deviceNode');
+          raise Exception.Create('hambridge.yaml: evdev input "' + Result.EvdevInputs[I].Slug + '" needs deviceNode');
         if Trim(Result.EvdevInputs[I].MqttTopic) = '' then
           Result.EvdevInputs[I].MqttTopic := 'evdev/' + Result.EvdevInputs[I].Slug + '/event';
       end;
@@ -343,9 +348,9 @@ var
   BusFound: Boolean;
 begin
   if D.EvdevEnabled and (Length(D.EvdevInputs) = 0) then
-    raise Exception.Create('devices.json: evdev.enabled is true but evdev.inputs is empty');
+    raise Exception.Create('hambridge.yaml: evdev.enabled is true but evdev.inputs is empty');
   if (Length(D.ViscaDevices) > 0) and (Length(D.Buses) = 0) then
-    raise Exception.Create('devices.json: VISCA devices require at least one bus in "buses"');
+    raise Exception.Create('hambridge.yaml: VISCA devices require at least one bus in "buses"');
   for I := 0 to High(D.ViscaDevices) do
   begin
     BusFound := False;
@@ -356,20 +361,20 @@ begin
         Break;
       end;
     if not BusFound then
-      raise Exception.Create('devices.json: VISCA device slug "' + D.ViscaDevices[I].Slug +
+      raise Exception.Create('hambridge.yaml: VISCA device slug "' + D.ViscaDevices[I].Slug +
         '" references unknown bus "' + D.ViscaDevices[I].BusId + '"');
   end;
   for I := 0 to High(D.ViscaDevices) do
     for J := I + 1 to High(D.ViscaDevices) do
       if SameText(D.ViscaDevices[I].Slug, D.ViscaDevices[J].Slug) then
-        raise Exception.Create('devices.json: duplicate VISCA device slug "' + D.ViscaDevices[I].Slug + '"');
+        raise Exception.Create('hambridge.yaml: duplicate VISCA device slug "' + D.ViscaDevices[I].Slug + '"');
   for I := 0 to High(D.EvdevInputs) do
     for J := I + 1 to High(D.EvdevInputs) do
       if SameText(D.EvdevInputs[I].Slug, D.EvdevInputs[J].Slug) then
-        raise Exception.Create('devices.json: duplicate evdev input slug "' + D.EvdevInputs[I].Slug + '"');
+        raise Exception.Create('hambridge.yaml: duplicate evdev input slug "' + D.EvdevInputs[I].Slug + '"');
 end;
 
-function DiscoverViscaMappingPath(const DevicesJsonPath: string; const D: TDevicesConfig): string;
+function DiscoverViscaMappingPath(const MainConfigPath: string; const D: TDevicesConfig): string;
 var
   e, cand, base: string;
 begin
@@ -382,7 +387,7 @@ begin
     cand := D.ViscaMappingPath;
     if not PathIsAbsolute(cand) then
     begin
-      base := ExtractFileDir(DevicesJsonPath);
+      base := ExtractFileDir(MainConfigPath);
       if base <> '' then
         cand := IncludeTrailingPathDelimiter(base) + cand
       else
@@ -391,15 +396,29 @@ begin
     if FileExists(cand) then
       Exit(cand);
   end;
-  base := ExtractFileDir(DevicesJsonPath);
+  base := ExtractFileDir(MainConfigPath);
   if base <> '' then
   begin
+    cand := IncludeTrailingPathDelimiter(base) + 'mappings/visca.yaml';
+    if FileExists(cand) then
+      Exit(cand);
+    cand := IncludeTrailingPathDelimiter(base) + 'mappings/visca.yml';
+    if FileExists(cand) then
+      Exit(cand);
+    cand := IncludeTrailingPathDelimiter(base) + 'visca.yaml';
+    if FileExists(cand) then
+      Exit(cand);
     cand := IncludeTrailingPathDelimiter(base) + 'visca-mapping.json';
     if FileExists(cand) then
       Exit(cand);
   end;
+  if FileExists('visca.yaml') then
+    Exit('visca.yaml');
   if FileExists('visca-mapping.json') then
     Exit('visca-mapping.json');
+  cand := '/etc/hambridge/config/mappings/visca.yaml';
+  if FileExists(cand) then
+    Exit(cand);
   cand := '/etc/hambridge/visca-mapping.json';
   if FileExists(cand) then
     Exit(cand);

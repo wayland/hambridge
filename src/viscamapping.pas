@@ -47,7 +47,7 @@ type
 implementation
 
 uses
-  jsonutil, Math;
+  jsonutil, Math, yamlmin;
 
 function JsonGetStringFromObject(Obj: TJSONObject; const Key: string; const Default: string = ''): string;
 var
@@ -412,31 +412,38 @@ var
   Data: TJSONData;
   Root: TJSONObject;
   ModelsObj: TJSONObject;
+  Ext: string;
 begin
   inherited Create;
   FModelDefinitionsRoot := nil;
-  FileStream := TFileStream.Create(MappingFilePath, fmOpenRead or fmShareDenyWrite);
-  try
-    Parser := TJSONParser.Create(FileStream);
+  Ext := LowerCase(ExtractFileExt(MappingFilePath));
+  if (Ext = '.yaml') or (Ext = '.yml') then
+    Data := YamlFileToJsonData(MappingFilePath)
+  else
+  begin
+    FileStream := TFileStream.Create(MappingFilePath, fmOpenRead or fmShareDenyWrite);
     try
-      Data := Parser.Parse;
+      Parser := TJSONParser.Create(FileStream);
+      try
+        Data := Parser.Parse;
+      finally
+        Parser.Free;
+      end;
     finally
-      Parser.Free;
+      FileStream.Free;
     end;
-  finally
-    FileStream.Free;
   end;
   if not (Data is TJSONObject) then
   begin
     Data.Free;
-    raise Exception.Create('visca-mapping.json: root must be an object');
+    raise Exception.Create('VISCA mapping: root must be an object');
   end;
   Root := TJSONObject(Data);
   ModelsObj := ObjGetObjectCI(Root, 'models');
   if ModelsObj = nil then
   begin
     Root.Free;
-    raise Exception.Create('visca-mapping.json: missing "models" object');
+    raise Exception.Create('VISCA mapping: missing "models" object');
   end;
   FModelDefinitionsRoot := TJSONObject(ModelsObj.Clone);
   Root.Free;

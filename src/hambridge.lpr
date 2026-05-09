@@ -1,9 +1,8 @@
 program hambridge;
 
 {
-  HaMBridge v0.3.3 entry: bridge.json + devices.json; optional evdev→MQTT (v0.1), MQTT device/#→VISCA (v0.2.1),
-  serial VISCA RX (v0.3), real-bus discipline (v0.3.1), coalesce + state cache + redundant skip (v0.3.2),
-  device reply decode + controller/<bus>/status (v0.3.3).
+  HaMBridge v0.4.0: single hambridge.yaml (+ VISCA mapping YAML); optional evdev→MQTT; MQTT device/#→VISCA;
+  serial VISCA RX; ACK/retry/commandAck; coalesce + state + redundant skip; reply decode + controller/<bus>/status.
 }
 
 {$mode ObjFPC}{$H+}
@@ -17,7 +16,7 @@ uses
   viscamapping, commandrouter;
 
 const
-  AppVersion = '0.3.3';
+  AppVersion = '0.4.0';
 
 var
   GStop: Boolean = False;
@@ -48,7 +47,7 @@ end;
 procedure PrintHelp;
 begin
   WriteLn('HaMBridge (Hardware-MQTT Bridge) ', AppVersion);
-  WriteLn('Usage: hambridge [--config PATH] [--devices PATH]');
+  WriteLn('Usage: hambridge [--config PATH]');
   WriteLn('See README.md and docs/user/ConfigurationGuide.md.');
 end;
 
@@ -59,8 +58,8 @@ begin
 end;
 
 var
-  BridgePath, DevPath, MapPath: string;
-  CliBridge, CliDev: string;
+  BridgePath, MapPath: string;
+  CliBridge: string;
   I: Integer;
   B: TBridgeConfig;
   D: TDevicesConfig;
@@ -72,7 +71,6 @@ var
   hasEvdev, hasVisca: Boolean;
 begin
   CliBridge := '';
-  CliDev := '';
   I := 1;
   while I <= ParamCount do
   begin
@@ -91,11 +89,6 @@ begin
       Inc(I);
       CliBridge := ParamStr(I);
     end
-    else if (ParamStr(I) = '--devices') and (I < ParamCount) then
-    begin
-      Inc(I);
-      CliDev := ParamStr(I);
-    end
     else
     begin
       WriteLn('Unknown argument: ', ParamStr(I));
@@ -105,31 +98,25 @@ begin
     Inc(I);
   end;
 
-  BridgePath := FindBridgeConfigPath(CliBridge);
+  BridgePath := FindHambridgeConfigPath(CliBridge);
   if BridgePath = '' then
   begin
-    WriteLn('No bridge.json found (use --config or BRIDGE_CONFIG or ./bridge.json or /etc/hambridge/bridge.json)');
-    Halt(1);
-  end;
-  DevPath := FindDevicesConfigPath(CliDev);
-  if DevPath = '' then
-  begin
-    WriteLn('No devices.json found');
+    WriteLn('No hambridge.yaml found. Use --config PATH, set BRIDGE_CONFIG, or install under ',
+      '.local/etc/config/, /etc/hambridge/config/, or /etc/hambridge/ (see docs/user/ConfigurationGuide.md).');
     Halt(1);
   end;
 
   B := LoadBridgeConfig(BridgePath);
   LogInit(B.LogLevel);
-  LogFmt(llInfo, 'Using bridge config %s', [BridgePath]);
-  D := LoadDevicesConfig(DevPath);
-  LogFmt(llInfo, 'Using devices config %s', [DevPath]);
+  LogFmt(llInfo, 'Using config %s', [BridgePath]);
+  D := LoadDevicesConfig(BridgePath);
   ValidateDevicesConfig(D);
 
   hasEvdev := D.EvdevEnabled and (Length(D.EvdevInputs) > 0);
   hasVisca := Length(D.ViscaDevices) > 0;
   if not hasEvdev and not hasVisca then
   begin
-    Log(llError, 'devices.json: enable evdev with non-empty inputs, and/or configure buses+VISCA devices');
+    Log(llError, 'hambridge.yaml: enable evdev with non-empty inputs, and/or configure buses+VISCA devices');
     Halt(1);
   end;
 
@@ -138,10 +125,10 @@ begin
   Router := nil;
   if hasVisca then
   begin
-    MapPath := DiscoverViscaMappingPath(DevPath, D);
+    MapPath := DiscoverViscaMappingPath(BridgePath, D);
     if MapPath = '' then
     begin
-      Log(llError, 'visca-mapping.json not found (set viscaMapping in devices.json, place file beside devices.json, or set BRIDGE_VISCA_MAPPING)');
+      Log(llError, 'VISCA mapping not found (device_mappings.visca in hambridge.yaml, mappings/visca.yaml beside it, or BRIDGE_VISCA_MAPPING)');
       Halt(1);
     end;
     LogFmt(llInfo, 'Using VISCA mapping %s', [MapPath]);

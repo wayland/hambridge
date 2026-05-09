@@ -2,6 +2,14 @@
 
 Notable changes to **HaMBridge** (this repository). Release history for packaging metadata remains in `packaging/debian/changelog` (Debian) and the RPM spec where required by those formats.
 
+## [0.4.0] — 2026-05-09
+
+### Changed
+
+- **Unified YAML configuration** — One file **`hambridge.yaml`** replaces **`bridge.json`** + **`devices.json`**. Top-level **`bridge`** holds MQTT and logging; **`device_mappings.visca`** points at the VISCA mapping file (paths relative to the main config directory). **`buses`** may use **`transport: serial`** and nested **`transport_configuration`** ( **`port`**, **`baud`**, **`rs485`**, …). **`--devices`** and **`BRIDGE_DEVICES`** are removed; pass the same path to **`--config`** / **`BRIDGE_CONFIG`** for everything.
+- **Config discovery** — Matches **`docs/user/ConfigurationGuide.md`** (no implicit **`./config/`** probe): CLI, **`BRIDGE_CONFIG`**, **`.local/etc/config/hambridge.yaml`**, **`/etc/hambridge/config/`**, **`/etc/hambridge/hambridge.yaml`**.
+- **VISCA mapping** — **`mappings/visca.yaml`** (and **`.yml`**) supported via in-tree minimal YAML parsing; **`.json`** mapping files still work.
+
 ## [0.3.3] — 2026-05-02
 
 ### Added

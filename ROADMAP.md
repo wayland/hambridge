@@ -47,13 +47,16 @@ This file lists **planned or deferred work** compared to [`docs/developers/Speci
 
 ---
 
-## v0.3.4 — Test suite
+## v0.4.0 — YAML conversion
 
-Does Free Pascal have a testing suite?  If so, fill in some information here about using it
+**Shipped:** single **`hambridge.yaml`** ( **`bridge`**, **`device_mappings`**, **`buses`**, **`devices`**, **`evdev`** ) plus VISCA mapping **`.yaml`**, with discovery as in **`docs/user/ConfigurationGuide.md`** (`--config`, **`BRIDGE_CONFIG`**, **`.local/etc/config/`**, **`/etc/hambridge/`**). **`--devices`** / **`BRIDGE_DEVICES`** removed.
 
-## v0.4.0 - YAML Conversion
+### v0.4.0 checklist
 
--   Convert all config files from JSON to YAML, and adjust the code accordingly
+- [x] Load **`bridge`** subtree via minimal YAML → JSON; **`BRIDGE_*`** env overrides unchanged in spirit.
+- [x] **`device_mappings.visca`**, **`buses`** with **`transport_configuration`** (serial); UDP buses rejected with a clear error until implemented.
+- [x] VISCA mapping file **`.yaml`/`.yml`** supported (JSON mapping path still accepted).
+- [x] Single **`--config`** path for both process and device configuration.
 
 ## v0.4.1 - Bus Enrichment
 
@@ -110,8 +113,12 @@ Allow defining a visca controller on serial as well (in the config file)
 - [ ] **Half-duplex / collision** — Is there any scenario where the bridge must not send while expecting a reply on the same socket (shared medium semantics)?
 - [ ] **MTU / fragmentation** — Do we forbid IP fragmentation (stay under PMTU), or detect and log?
 
+## v0.5.0 — Test suite
 
-## v0.5.0 — TLS configuration (optional)
+Does Free Pascal have a testing suite?  If so, fill in some information here about using it
+
+
+## v0.5.1 — TLS configuration (optional)
 
 **Intent:** implement full MQTT TLS configuration while keeping TLS **optional**.
 
@@ -122,11 +129,11 @@ Allow defining a visca controller on serial as well (in the config file)
 
 ---
 
-## v0.5.1 — Github Actions
+## v0.5.2 — Github Actions
 
 Set up GitHub Actions that will do a release.  A release should consist of packages for a) Redhat and b) Raspbian
 
-## v0.5.2 - Security scan
+## v0.5.3 - Security scan
 
 See if there's a skill for doing a security scan, then use that.  
 

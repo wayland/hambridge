@@ -6,7 +6,7 @@ unit commandrouter;
   v0.3: serial RX (VISCA frames to FF), decode controller packets → controller/<bus>/event,
         device replies → device/<slug>/telemetry and status snapshot on controller/reply.
   v0.3.1: ACK wait + retry (scheduler), TX queue + pump, serial reopen, MQTT device/<slug>/commandAck,
-        optional per-bus rs485 ioctl from devices.json.
+        optional per-bus rs485 ioctl from hambridge.yaml transport_configuration.
   v0.3.2: scheduler.coalesce queue drops, last-wire skip for redundant VISCA, state snapshot on status.
   v0.3.3: device reply decode on telemetry/status; controller/<bus>/status bus snapshot.
 }

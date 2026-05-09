@@ -1,8 +1,8 @@
 unit config;
 
 {
-  Loads process-wide settings from bridge.json (plan §3.0): MQTT broker, optional LWT/birth,
-  logging. Applies BRIDGE_* environment overrides before reading values.
+  Loads process-wide settings from hambridge.yaml top-level "bridge" (plan §3.0): MQTT broker,
+  optional LWT/birth, logging. Applies BRIDGE_* environment overrides before reading values.
 }
 
 {$mode ObjFPC}{$H+}
@@ -10,11 +10,11 @@ unit config;
 interface
 
 uses
-  SysUtils, Classes, fpjson, jsonparser, logger;
+  SysUtils, Classes, fpjson, logger;
 
 type
   { MQTT Last Will and Testament: broker publishes this if the client disconnects uncleanly.
-    Populated from bridge.json "mqtt.lwt" (topic, payload, retain, qos). }
+    Populated from hambridge.yaml bridge.mqtt.lwt (topic, payload, retain, qos). }
   TBridgeMqttLwt = record
     Topic: string;    { MQTT topic for the LWT message }
     Payload: string;  { Payload the broker should send on unexpected disconnect }
@@ -23,7 +23,7 @@ type
   end;
 
   { Optional "birth" message published when the client connects successfully.
-    Populated from bridge.json "mqtt.birth". }
+    Populated from hambridge.yaml bridge.mqtt.birth. }
   TBridgeMqttBirth = record
     Topic: string;    { MQTT topic to publish on connect }
     Payload: string;  { Payload (often "online") }
@@ -31,7 +31,7 @@ type
     Qos: Byte;
   end;
 
-  { Broker connection and MQTT session fields from bridge.json "mqtt" object. }
+  { Broker connection and MQTT session fields from bridge.mqtt. }
   TBridgeMqtt = record
     Host: string;         { Broker hostname or IP (required) }
     Port: Word;            { Broker TCP port (default 1883) }
@@ -44,22 +44,22 @@ type
     Birth: TBridgeMqttBirth; { Connect announcement; empty if mqtt.birth omitted }
   end;
 
-  { Full bridge.json runtime view after parse + env overrides. }
+  { Full bridge subtree runtime view after parse + env overrides. }
   TBridgeConfig = record
     Mqtt: TBridgeMqtt;      { From "mqtt" }
     LogLevel: TLogLevel;     { From "log.level" or default info }
     LogFormat: string;       { From "log.format" (e.g. text); reserved for future json logs }
   end;
 
-{ See implementation: discovery order for bridge.json. }
-function FindBridgeConfigPath(const CliPath: string): string;
+{ Discovery order: docs/user/ConfigurationGuide.md (no implicit ./config/). }
+function FindHambridgeConfigPath(const CliPath: string): string;
 { Parses file, merges BRIDGE_* env, validates; frees JSON tree before return. }
 function LoadBridgeConfig(const Path: string): TBridgeConfig;
 
 implementation
 
 uses
-  StrUtils, jsonutil;
+  StrUtils, jsonutil, yamlmin;
 
 { True if Path is non-empty and names an existing file (used for config discovery). }
 function FileExistsReadable(const Path: string): Boolean;
@@ -67,18 +67,27 @@ begin
   Result := (Path <> '') and FileExists(Path);
 end;
 
-{ Resolves bridge.json path: CLI wins, then BRIDGE_CONFIG, ./bridge.json, /etc/hambridge/bridge.json.
-  Returns '' if none exist so the caller can print a helpful error. }
-function FindBridgeConfigPath(const CliPath: string): string;
+function FindHambridgeConfigPath(const CliPath: string): string;
+var
+  L: string;
 begin
   if FileExistsReadable(CliPath) then
     Exit(CliPath);
   if FileExistsReadable(GetEnvironmentVariable('BRIDGE_CONFIG')) then
     Exit(GetEnvironmentVariable('BRIDGE_CONFIG'));
-  if FileExistsReadable('bridge.json') then
-    Exit('bridge.json');
-  if FileExistsReadable('/etc/hambridge/bridge.json') then
-    Exit('/etc/hambridge/bridge.json');
+  L := IncludeTrailingPathDelimiter(GetCurrentDir) + '.local/etc/config/';
+  if FileExistsReadable(L + 'hambridge.yaml') then
+    Exit(L + 'hambridge.yaml');
+  if FileExistsReadable(L + 'hambridge.yml') then
+    Exit(L + 'hambridge.yml');
+  if FileExistsReadable('/etc/hambridge/config/hambridge.yaml') then
+    Exit('/etc/hambridge/config/hambridge.yaml');
+  if FileExistsReadable('/etc/hambridge/config/hambridge.yml') then
+    Exit('/etc/hambridge/config/hambridge.yml');
+  if FileExistsReadable('/etc/hambridge/hambridge.yaml') then
+    Exit('/etc/hambridge/hambridge.yaml');
+  if FileExistsReadable('/etc/hambridge/hambridge.yml') then
+    Exit('/etc/hambridge/hambridge.yml');
   Result := '';
 end;
 
@@ -313,7 +322,7 @@ begin
   FillChar(Result, SizeOf(Result), 0);
   M := ObjGetObjectCI(Obj, 'mqtt');
   if M = nil then
-    raise Exception.Create('bridge.json: missing "mqtt" object');
+    raise Exception.Create('hambridge.yaml: bridge.mqtt object is required');
   Result.Host := JsonGetString(M, 'host', '');
   Result.Port := JsonGetWord(M, 'port', 1883);
   Result.Tls := JsonGetBool(M, 'tls', False);
@@ -341,40 +350,30 @@ begin
   end;
 end;
 
-{ Reads bridge.json from disk, applies env overrides, validates required fields, returns TBridgeConfig.
-  Root JSON object is freed before return. }
+{ Reads hambridge.yaml from disk, applies env overrides on the bridge subtree, validates. }
 function LoadBridgeConfig(const Path: string): TBridgeConfig;
 var
-  Parser: TJSONParser;
-  Stream: TFileStream;
   Data: TJSONData;
-  Root, LogObj: TJSONObject;
+  Root, BridgeObj, LogObj: TJSONObject;
 begin
   FillChar(Result, SizeOf(Result), 0);
-  Stream := TFileStream.Create(Path, fmOpenRead or fmShareDenyWrite);
-  try
-    Parser := TJSONParser.Create(Stream);
-    try
-      Data := Parser.Parse;
-    finally
-      Parser.Free;
-    end;
-  finally
-    Stream.Free;
-  end;
+  Data := YamlFileToJsonData(Path);
   if not (Data is TJSONObject) then
   begin
     Data.Free;
-    raise Exception.Create('bridge.json: root must be an object');
+    raise Exception.Create('hambridge.yaml: root must be an object');
   end;
   Root := TJSONObject(Data);
   try
-    ApplyBridgeEnvOverrides(Root);
-    Result.Mqtt := LoadMqttSection(Root);
+    BridgeObj := ObjGetObjectCI(Root, 'bridge');
+    if BridgeObj = nil then
+      raise Exception.Create('hambridge.yaml: missing top-level "bridge" object');
+    ApplyBridgeEnvOverrides(BridgeObj);
+    Result.Mqtt := LoadMqttSection(BridgeObj);
     if Result.Mqtt.Host = '' then
-      raise Exception.Create('bridge.json: mqtt.host is required');
+      raise Exception.Create('hambridge.yaml: bridge.mqtt.host is required');
 
-    LogObj := ObjGetObjectCI(Root, 'log');
+    LogObj := ObjGetObjectCI(BridgeObj, 'log');
     if LogObj <> nil then
     begin
       Result.LogLevel := LogLevelFromString(JsonGetString(LogObj, 'level', 'info'));

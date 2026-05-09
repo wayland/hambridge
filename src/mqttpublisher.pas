@@ -1,7 +1,7 @@
 unit mqttpublisher;
 
 {
-  Wraps prof7bit/fpc-mqtt-client TMQTTClient with bridge.json settings: connect/reconnect backoff,
+  Wraps prof7bit/fpc-mqtt-client TMQTTClient with hambridge.yaml bridge.mqtt settings: connect/reconnect backoff,
   optional TLS init, birth on connect, best-effort LWT publish on shutdown (see plan §3.0 notes).
 }
 
