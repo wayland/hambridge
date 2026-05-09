@@ -7,6 +7,8 @@
 # v0.4.2+: VISCA devices under endpoints[] (match.endpoint_type: device).
 # v0.4.3+: Linux input under buses.*.protocol: evdev + endpoints[] (match.endpoint_type: controller, match.protocol: evdev).
 #          Controller MQTT: controller/<slug>/event (endpoint slug). No top-level evdev: key.
+# v0.4.4+: VISCA over UDP buses (transport: udp, protocol: visca) + device endpoints with udpHost/udpPort
+#          (or bus defaultUdpHost/defaultUdpPort). Exactly one controller endpoint per UDP bus (match.protocol: visca).
 
 bridge:
   mqtt:
@@ -72,6 +74,19 @@ endpoints:
     scheduler:
       minInterCommandMs: 50
       maxQueueDepth: 50
+  - match:
+      endpoint_type: device
+      bus: visca-udp-1
+      deviceID: 1
+    slug: camera_udp_stage
+    model: marshall-cv344
+    udpHost: "192.0.2.10"
+    udpPort: 52381
+  - match:
+      endpoint_type: controller
+      protocol: visca
+      bus: visca-udp-1
+    slug: visca_udp_listener
   - match:
       endpoint_type: controller
       protocol: evdev

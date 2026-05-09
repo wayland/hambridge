@@ -28,16 +28,24 @@ type
     DelayRtsAfterSend: Cardinal;
   end;
 
-  TSerialBusConfig = record
+  { VISCA bus (serial or udp). Other protocols use BusMeta only. }
+  TViscaBusConfig = record
     Id: string;
     Transport: string;
     Protocol: string;
+    { Serial (transport=serial). }
     Port: string;
     Baud: Integer;
     DataBits: Integer;
     Parity: Char;
     StopBits: Integer;
     Rs485: TRs485BusConfig;
+    { UDP (transport=udp). }
+    BindHost: string;
+    BindPort: Integer;
+    AllowFrom: array of string; { CIDR list as strings; parsed/enforced by UDP layer }
+    DefaultUdpHost: string;
+    DefaultUdpPort: Integer;
   end;
 
   TBusMeta = record
@@ -55,6 +63,9 @@ type
     Model: string;
     BusId: string;
     ViscaAddress: Byte;        { VISCA peripheral address 1..7 from JSON "viscaAddress" }
+    { For UDP buses: resolved remote endpoint for outbound sends (host/port must-match reply routing). }
+    UdpHost: string;
+    UdpPort: Integer;
     MinInterCommandMs: Cardinal;
     MaxQueueDepth: Cardinal;
     AckTimeoutMs: Cardinal;     { 0 = do not wait for VISCA reply before next command }
@@ -63,19 +74,28 @@ type
     CoalescePaths: array of string; { scheduler.coalesce: first path segment, e.g. pan / tilt / zoom }
   end;
 
-  TSerialBusDyn = array of TSerialBusConfig;
+  TViscaBusDyn = array of TViscaBusConfig;
   TViscaDeviceDyn = array of TViscaDeviceConfig;
   TBusMetaDyn = array of TBusMeta;
   TEvdevInputDyn = array of TEvdevInputConfig;
 
+  TViscaControllerConfig = record
+    Slug: string;
+    BusId: string;
+  end;
+
+  TViscaControllerDyn = array of TViscaControllerConfig;
+
   TDevicesConfig = record
     EvdevEnabled: Boolean;
     EvdevInputs: TEvdevInputDyn;
-    { Serial VISCA buses only (transport=serial, protocol=visca). }
-    Buses: TSerialBusDyn;
+    { VISCA buses (serial + udp). }
+    ViscaBuses: TViscaBusDyn;
     { Metadata for all buses under hambridge.yaml buses.* (serial/udp/none). }
     BusMeta: TBusMetaDyn;
     ViscaDevices: TViscaDeviceDyn;
+    { VISCA controller endpoints (serial/udp) for publishing controller/<slug>/... }
+    ViscaControllers: TViscaControllerDyn;
     ViscaMappingPath: string;
   end;
 
@@ -176,12 +196,14 @@ begin
   Result := S[1];
 end;
 
-procedure LoadBuses(Root: TJSONObject; var Buses: TSerialBusDyn);
+procedure LoadViscaBuses(Root: TJSONObject; var Buses: TViscaBusDyn);
 var
   BObj: TJSONObject;
   I, OutCount: Integer;
   Name: string;
   Row, Rs485Obj, Tc: TJSONObject;
+  AllowArr: TJSONArray;
+  J: Integer;
   Transport, Protocol: string;
 begin
   SetLength(Buses, 0);
@@ -208,45 +230,87 @@ begin
     if (ObjFindCI(Row, 'protocol_config') <> nil) and (not (ObjFindCI(Row, 'protocol_config') is TJSONObject)) then
       raise Exception.Create('hambridge.yaml: bus "' + Name + '" protocol_config must be an object when present');
 
-    { Only serial/visca buses are turned into TSerialBusConfig entries for the current VISCA router.
-      Other buses (udp/visca, none/evdev, future) are validated and stored in BusMeta. }
-    if SameText(Transport, 'serial') and SameText(Protocol, 'visca') then
+    { VISCA buses (serial + udp) are turned into TViscaBusConfig entries for the VISCA router. }
+    if SameText(Protocol, 'visca') and (SameText(Transport, 'serial') or SameText(Transport, 'udp')) then
     begin
       Buses[OutCount].Id := Name;
       Buses[OutCount].Transport := Transport;
       Buses[OutCount].Protocol := Protocol;
+      Buses[OutCount].BindHost := '';
+      Buses[OutCount].BindPort := 0;
+      Buses[OutCount].DefaultUdpHost := '';
+      Buses[OutCount].DefaultUdpPort := 0;
+      SetLength(Buses[OutCount].AllowFrom, 0);
 
       Tc := ObjGetObjectCI(Row, 'transport_configuration');
-      if Tc <> nil then
+      FillChar(Buses[OutCount].Rs485, SizeOf(Buses[OutCount].Rs485), 0);
+      Buses[OutCount].Port := '';
+      Buses[OutCount].Baud := 9600;
+      Buses[OutCount].DataBits := 8;
+      Buses[OutCount].Parity := 'N';
+      Buses[OutCount].StopBits := 1;
+
+      if SameText(Transport, 'serial') then
       begin
-        Buses[OutCount].Port := JsonGetString(Tc, 'port', '');
-        Buses[OutCount].Baud := JsonGetInt(Tc, 'baud', 9600);
-        Buses[OutCount].DataBits := JsonGetInt(Tc, 'dataBits', 8);
-        Buses[OutCount].Parity := JsonGetChar(Tc, 'parity', 'N');
-        Buses[OutCount].StopBits := JsonGetInt(Tc, 'stopBits', 1);
-        FillChar(Buses[OutCount].Rs485, SizeOf(Buses[OutCount].Rs485), 0);
-        Rs485Obj := ObjGetObjectCI(Tc, 'rs485');
+        { Serial VISCA }
+        if Tc <> nil then
+        begin
+          Buses[OutCount].Port := JsonGetString(Tc, 'port', '');
+          Buses[OutCount].Baud := JsonGetInt(Tc, 'baud', 9600);
+          Buses[OutCount].DataBits := JsonGetInt(Tc, 'dataBits', 8);
+          Buses[OutCount].Parity := JsonGetChar(Tc, 'parity', 'N');
+          Buses[OutCount].StopBits := JsonGetInt(Tc, 'stopBits', 1);
+          Rs485Obj := ObjGetObjectCI(Tc, 'rs485');
+        end
+        else
+        begin
+          { legacy siblings }
+          Buses[OutCount].Port := JsonGetString(Row, 'port', '');
+          Buses[OutCount].Baud := JsonGetInt(Row, 'baud', 9600);
+          Buses[OutCount].DataBits := JsonGetInt(Row, 'dataBits', 8);
+          Buses[OutCount].Parity := JsonGetChar(Row, 'parity', 'N');
+          Buses[OutCount].StopBits := JsonGetInt(Row, 'stopBits', 1);
+          Rs485Obj := ObjGetObjectCI(Row, 'rs485');
+        end;
+        if Rs485Obj <> nil then
+        begin
+          Buses[OutCount].Rs485.Enabled := JsonGetBool(Rs485Obj, 'enabled', False);
+          Buses[OutCount].Rs485.RtsOnSend := JsonGetBool(Rs485Obj, 'rtsOnSend', True);
+          Buses[OutCount].Rs485.RtsAfterSend := JsonGetBool(Rs485Obj, 'rtsAfterSend', False);
+          Buses[OutCount].Rs485.DelayRtsBeforeSend := Cardinal(Max(0, JsonGetInt(Rs485Obj, 'delayRtsBeforeSend', 0)));
+          Buses[OutCount].Rs485.DelayRtsAfterSend := Cardinal(Max(0, JsonGetInt(Rs485Obj, 'delayRtsAfterSend', 0)));
+        end;
+        if Buses[OutCount].Port = '' then
+          raise Exception.Create('hambridge.yaml: bus "' + Name + '" needs transport_configuration.port (or legacy port)');
       end
       else
       begin
-        Buses[OutCount].Port := JsonGetString(Row, 'port', '');
-        Buses[OutCount].Baud := JsonGetInt(Row, 'baud', 9600);
-        Buses[OutCount].DataBits := JsonGetInt(Row, 'dataBits', 8);
-        Buses[OutCount].Parity := JsonGetChar(Row, 'parity', 'N');
-        Buses[OutCount].StopBits := JsonGetInt(Row, 'stopBits', 1);
-        FillChar(Buses[OutCount].Rs485, SizeOf(Buses[OutCount].Rs485), 0);
-        Rs485Obj := ObjGetObjectCI(Row, 'rs485');
+        { UDP VISCA }
+        if Tc = nil then
+          raise Exception.Create('hambridge.yaml: udp bus "' + Name + '" needs transport_configuration');
+        Buses[OutCount].BindHost := Trim(JsonGetString(Tc, 'bindHost', '0.0.0.0'));
+        Buses[OutCount].BindPort := JsonGetInt(Tc, 'bindPort', 0);
+        if (Buses[OutCount].BindPort <= 0) or (Buses[OutCount].BindPort > 65535) then
+          raise Exception.Create('hambridge.yaml: udp bus "' + Name + '" needs transport_configuration.bindPort (1..65535)');
+        Buses[OutCount].DefaultUdpHost := Trim(JsonGetString(Tc, 'defaultUdpHost', ''));
+        Buses[OutCount].DefaultUdpPort := JsonGetInt(Tc, 'defaultUdpPort', 0);
+        if (Buses[OutCount].DefaultUdpHost <> '') or (Buses[OutCount].DefaultUdpPort <> 0) then
+        begin
+          if (Buses[OutCount].DefaultUdpHost = '') or (Buses[OutCount].DefaultUdpPort <= 0) or (Buses[OutCount].DefaultUdpPort > 65535) then
+            raise Exception.Create('hambridge.yaml: udp bus "' + Name + '" defaultUdpHost/defaultUdpPort must both be set (or both omitted)');
+        end;
+        if ObjFindCI(Tc, 'allowFrom') is TJSONArray then
+        begin
+          AllowArr := TJSONArray(ObjFindCI(Tc, 'allowFrom'));
+          SetLength(Buses[OutCount].AllowFrom, AllowArr.Count);
+          for J := 0 to AllowArr.Count - 1 do
+          begin
+            Buses[OutCount].AllowFrom[J] := '';
+            if AllowArr.Items[J] is TJSONString then
+              Buses[OutCount].AllowFrom[J] := Trim(TJSONString(AllowArr.Items[J]).AsString);
+          end;
+        end;
       end;
-      if Rs485Obj <> nil then
-      begin
-        Buses[OutCount].Rs485.Enabled := JsonGetBool(Rs485Obj, 'enabled', False);
-        Buses[OutCount].Rs485.RtsOnSend := JsonGetBool(Rs485Obj, 'rtsOnSend', True);
-        Buses[OutCount].Rs485.RtsAfterSend := JsonGetBool(Rs485Obj, 'rtsAfterSend', False);
-        Buses[OutCount].Rs485.DelayRtsBeforeSend := Cardinal(Max(0, JsonGetInt(Rs485Obj, 'delayRtsBeforeSend', 0)));
-        Buses[OutCount].Rs485.DelayRtsAfterSend := Cardinal(Max(0, JsonGetInt(Rs485Obj, 'delayRtsAfterSend', 0)));
-      end;
-      if Buses[OutCount].Port = '' then
-        raise Exception.Create('hambridge.yaml: bus "' + Name + '" needs transport_configuration.port (or legacy port)');
       Inc(OutCount);
     end;
   end;
@@ -300,8 +364,8 @@ begin
   Result := -1;
 end;
 
-procedure LoadEndpoints(Root: TJSONObject; const Meta: TBusMetaDyn; out Devs: TViscaDeviceDyn; out Inputs: TEvdevInputDyn;
-  out EvdevEnabled: Boolean);
+procedure LoadEndpoints(Root: TJSONObject; const Meta: TBusMetaDyn; const ViscaBuses: TViscaBusDyn;
+  out Devs: TViscaDeviceDyn; out Inputs: TEvdevInputDyn; out Controllers: TViscaControllerDyn; out EvdevEnabled: Boolean);
 var
   Arr, CoalArr: TJSONArray;
   I, J: Integer;
@@ -310,9 +374,13 @@ var
   BusIx: Integer;
   DeviceID: Integer;
   Inp: TEvdevInputConfig;
+  UHost: string;
+  UPort: Integer;
+  VBusIx: Integer;
 begin
   SetLength(Devs, 0);
   SetLength(Inputs, 0);
+  SetLength(Controllers, 0);
   EvdevEnabled := False;
   if not (ObjFindCI(Root, 'endpoints') is TJSONArray) then
     Exit;
@@ -352,6 +420,8 @@ begin
       Devs[High(Devs)].Model := Model;
       Devs[High(Devs)].BusId := BusId;
       Devs[High(Devs)].ViscaAddress := Byte(DeviceID);
+      Devs[High(Devs)].UdpHost := '';
+      Devs[High(Devs)].UdpPort := 0;
       Devs[High(Devs)].MinInterCommandMs := 40;
       Devs[High(Devs)].MaxQueueDepth := 50;
       Devs[High(Devs)].AckTimeoutMs := 800;
@@ -376,6 +446,32 @@ begin
             if CoalArr.Items[J] is TJSONString then
               Devs[High(Devs)].CoalescePaths[J] := Trim(TJSONString(CoalArr.Items[J]).AsString);
           end;
+        end;
+      end;
+
+      { UDP endpoint resolution for device control and reply correlation (v0.4.4). }
+      if SameText(Meta[BusIx].Transport, 'udp') then
+      begin
+        UHost := Trim(JsonGetString(Item, 'udpHost', ''));
+        UPort := JsonGetInt(Item, 'udpPort', 0);
+        if (UHost <> '') or (UPort <> 0) then
+        begin
+          if (UHost = '') or (UPort <= 0) or (UPort > 65535) then
+            raise Exception.Create('hambridge.yaml: device endpoint "' + Slug + '" udpHost/udpPort must both be set (or both omitted)');
+          Devs[High(Devs)].UdpHost := UHost;
+          Devs[High(Devs)].UdpPort := UPort;
+        end
+        else
+        begin
+          { fall back to bus defaultUdpHost/defaultUdpPort }
+          VBusIx := -1;
+          for J := 0 to High(ViscaBuses) do
+            if SameText(ViscaBuses[J].Id, BusId) then
+              VBusIx := J;
+          if (VBusIx < 0) or (Trim(ViscaBuses[VBusIx].DefaultUdpHost) = '') or (ViscaBuses[VBusIx].DefaultUdpPort <= 0) then
+            raise Exception.Create('hambridge.yaml: device endpoint "' + Slug + '" on udp bus must set udpHost/udpPort or the bus must set defaultUdpHost/defaultUdpPort');
+          Devs[High(Devs)].UdpHost := Trim(ViscaBuses[VBusIx].DefaultUdpHost);
+          Devs[High(Devs)].UdpPort := ViscaBuses[VBusIx].DefaultUdpPort;
         end;
       end;
     end
@@ -408,7 +504,14 @@ begin
         EvdevEnabled := True;
       end
       else if Protocol = 'visca' then
-        raise Exception.Create('hambridge.yaml: controller endpoint "' + Slug + '" protocol visca not implemented yet')
+      begin
+        if not SameText(Meta[BusIx].Protocol, 'visca') then
+          raise Exception.Create('hambridge.yaml: controller endpoint "' + Slug + '" protocol visca requires a visca bus');
+        { one controller endpoint per bus is required for UDP; allowed for serial too (falls back to legacy bus topic if omitted). }
+        SetLength(Controllers, Length(Controllers) + 1);
+        Controllers[High(Controllers)].Slug := Slug;
+        Controllers[High(Controllers)].BusId := BusId;
+      end
       else
         raise Exception.Create('hambridge.yaml: controller endpoint "' + Slug + '" has unknown match.protocol "' + Protocol + '"');
     end
@@ -432,7 +535,7 @@ begin
   end;
   Root := TJSONObject(Data);
   try
-    LoadBuses(Root, Result.Buses);
+    LoadViscaBuses(Root, Result.ViscaBuses);
     LoadBusMeta(Root, Result.BusMeta);
 
     Result.ViscaMappingPath := '';
@@ -443,7 +546,7 @@ begin
       Result.ViscaMappingPath := JsonGetString(Root, 'viscaMapping', '');
     if Result.ViscaMappingPath = '' then
       Result.ViscaMappingPath := JsonGetString(Root, 'visca_mapping', '');
-    LoadEndpoints(Root, Result.BusMeta, Result.ViscaDevices, TmpInputs, Result.EvdevEnabled);
+    LoadEndpoints(Root, Result.BusMeta, Result.ViscaBuses, Result.ViscaDevices, TmpInputs, Result.ViscaControllers, Result.EvdevEnabled);
     Result.EvdevInputs := TmpInputs;
   finally
     Root.Free;
@@ -452,7 +555,8 @@ end;
 
 procedure ValidateDevicesConfig(const D: TDevicesConfig);
 var
-  I, J: Integer;
+  I, J, K: Integer;
+  Found: Boolean;
 begin
   for I := 0 to High(D.BusMeta) do
   begin
@@ -467,7 +571,23 @@ begin
     end;
   end;
 
-  if (Length(D.ViscaDevices) > 0) and (Length(D.Buses) = 0) then
+  for I := 0 to High(D.ViscaBuses) do
+  begin
+    if SameText(D.ViscaBuses[I].Transport, 'udp') then
+    begin
+      Found := False;
+      for K := 0 to High(D.ViscaControllers) do
+        if SameText(D.ViscaControllers[K].BusId, D.ViscaBuses[I].Id) then
+        begin
+          Found := True;
+          Break;
+        end;
+      if not Found then
+        raise Exception.Create('hambridge.yaml: udp visca bus "' + D.ViscaBuses[I].Id + '" requires exactly one controller endpoint (match.protocol: visca)');
+    end;
+  end;
+
+  if (Length(D.ViscaDevices) > 0) and (Length(D.ViscaBuses) = 0) then
     raise Exception.Create('hambridge.yaml: VISCA devices require at least one bus in "buses"');
   for I := 0 to High(D.ViscaDevices) do
     for J := I + 1 to High(D.ViscaDevices) do
@@ -477,6 +597,35 @@ begin
     for J := I + 1 to High(D.EvdevInputs) do
       if SameText(D.EvdevInputs[I].Slug, D.EvdevInputs[J].Slug) then
         raise Exception.Create('hambridge.yaml: duplicate evdev input slug "' + D.EvdevInputs[I].Slug + '"');
+
+  { v0.4.4 UDP uniqueness rules. }
+  for I := 0 to High(D.ViscaControllers) do
+    for J := I + 1 to High(D.ViscaControllers) do
+      if SameText(D.ViscaControllers[I].BusId, D.ViscaControllers[J].BusId) then
+        raise Exception.Create('hambridge.yaml: multiple VISCA controller endpoints reference bus "' + D.ViscaControllers[I].BusId + '" (only one allowed)');
+
+  { Within a UDP bus: (udpHost, udpPort, deviceID) must be unique. }
+  for I := 0 to High(D.ViscaDevices) do
+    for J := I + 1 to High(D.ViscaDevices) do
+      if SameText(D.ViscaDevices[I].BusId, D.ViscaDevices[J].BusId) and
+         (D.ViscaDevices[I].UdpHost <> '') and SameText(D.ViscaDevices[I].UdpHost, D.ViscaDevices[J].UdpHost) and
+         (D.ViscaDevices[I].UdpPort = D.ViscaDevices[J].UdpPort) and
+         (D.ViscaDevices[I].ViscaAddress = D.ViscaDevices[J].ViscaAddress) then
+        raise Exception.Create('hambridge.yaml: duplicate UDP device triple (udpHost, udpPort, deviceID) on bus "' + D.ViscaDevices[I].BusId + '"');
+
+  { Across UDP buses: (udpHost, udpPort) must not be reused. }
+  for I := 0 to High(D.ViscaDevices) do
+    for J := I + 1 to High(D.ViscaDevices) do
+    begin
+      if (D.ViscaDevices[I].UdpHost = '') or (D.ViscaDevices[J].UdpHost = '') then
+        Continue;
+      if not (SameText(D.ViscaDevices[I].UdpHost, D.ViscaDevices[J].UdpHost) and (D.ViscaDevices[I].UdpPort = D.ViscaDevices[J].UdpPort)) then
+        Continue;
+      if SameText(D.ViscaDevices[I].BusId, D.ViscaDevices[J].BusId) then
+        Continue;
+      raise Exception.Create('hambridge.yaml: UDP (udpHost, udpPort) pair is reused across buses: ' +
+        D.ViscaDevices[I].UdpHost + ':' + IntToStr(D.ViscaDevices[I].UdpPort));
+    end;
 end;
 
 function DiscoverViscaMappingPath(const MainConfigPath: string; const D: TDevicesConfig): string;

@@ -17,7 +17,7 @@ interface
 
 uses
   SysUtils, Classes, ctypes,
-  devicesconfig, viscamapping, serialport, logger, mqttpublisher, viscareplydecode;
+  devicesconfig, viscamapping, serialport, udpport, logger, mqttpublisher, viscareplydecode;
 
 const
   MaxViscaRxAccum = 512;
@@ -51,8 +51,9 @@ type
     FDeviceConfiguration: TDevicesConfig;
     FViscaCommandMapping: TViscaMapping;
     FMqtt: THaMqttPublisher;
-    FSerialPorts: array of TSerialPort;
-    FCommandQueuesPerBus: array of TFPList;
+    FSerialPorts: array of TSerialPort; { nil for udp buses }
+    FUdpPorts: array of TUdpViscaPort;  { nil for serial buses }
+    FCommandQueuesPerBus: array of TFPList; { per VISCA bus }
     FLastTransmitTickPerBus: array of QWord;
     FInterCommandGapMsPerBus: array of Cardinal;
     FMaxQueueDepthPerBus: array of Cardinal;
@@ -64,22 +65,30 @@ type
     FInFlightAckTimeoutMs: array of Cardinal;
     FInFlightSendCount: array of Integer;
     FInFlightPacket: array of TBytes;
+    FInFlightUdpHost: array of string;
+    FInFlightUdpPort: array of Integer;
     FRetryResumeTick: array of QWord;
     FPathWireCache: array of array of TPathLastWire;
     FStateSnap: array of TDeviceStateSnap;
     FLastBusCtrlEventJson: array of string;
     FLastBusDeviceReplyJson: array of string;
-    function IndexOfSerialBusByConfigId(const BusId: string): Integer;
+    FControllerTopicPerBus: array of string; { controller topic slug per bus (fallback bus id) }
+    function UdpRemoteAllowed(BusIndex: Integer; const RemoteHost: string): Boolean;
+    function IndexOfViscaBusById(const BusId: string): Integer;
     function IndexOfViscaDeviceByTopicSlug(const TopicSlug: string): Integer;
-    function IndexOfViscaDeviceOnBusByReplyByte(SerialBusIndex: Integer; ReplyFirst: Byte): Integer;
+    function IndexOfViscaDeviceOnBusByReplyByte(BusIndex: Integer; ReplyFirst: Byte): Integer;
+    function IndexOfUdpDeviceOnBusByRemoteAndId(BusIndex: Integer; const RemoteHost: string; RemotePort: Integer; DeviceID: Integer): Integer;
+    function ControllerTopicSlugForBusIndex(BusIndex: Integer): string;
     procedure TrimOldestCommandsIfQueueExceedsDepth(SerialBusIndex, DeviceConfigIndex: Integer; MaxDepth: Cardinal);
-    procedure DrainSerialIncoming(SerialBusIndex: Integer);
+    procedure DrainSerialIncoming(BusIndex: Integer);
+    procedure DrainUdpIncoming(BusIndex: Integer);
     procedure ConsumeLeadingBytes(var Buf: TBytes; Count: Integer);
-    procedure HandleCompleteViscaFrame(SerialBusIndex: Integer; const Frame: TBytes);
-    procedure PublishControllerSemantic(const BusId, DeviceSlug, CommandPath, PayloadJson, HexTrace: string);
-    procedure PublishControllerRawEvent(const BusId, HexTrace: string);
+    procedure HandleCompleteViscaFrame(BusIndex: Integer; const Frame: TBytes; const RemoteHost: string = ''; RemotePort: Integer = 0);
+    procedure PublishControllerSemantic(const BusId, ControllerSlug: string; const DeviceSlugOrEmpty: string;
+      const CommandPath, PayloadJson, HexTrace: string; const RemoteHost: string = ''; RemotePort: Integer = 0);
+    procedure PublishControllerRawEvent(const BusId, ControllerSlug, HexTrace: string; const RemoteHost: string = ''; RemotePort: Integer = 0);
     procedure PublishDeviceTelemetry(const DeviceSlug, Kind, HexTrace: string; const DecodeJsonObject: string = '');
-    procedure PublishControllerBusSnapshot(SerialBusIndex: Integer);
+    procedure PublishControllerBusSnapshot(BusIndex: Integer);
     procedure PublishDeviceStatusMerge(const DeviceSlug: string; DevIdx: Integer);
     procedure PublishDeviceCommandAck(const DeviceSlug, MqttTopic, CmdPath: string; Ok: Boolean;
       const Reason: string; Attempts: Integer; const ViscaKind, ViscaHex: string);
@@ -308,30 +317,127 @@ begin
     #10, '\n', [rfReplaceAll]) + '"';
 end;
 
+function ParseDottedIPv4ToU32(const S: string; out Addr: Cardinal): Boolean;
+var
+  A, B, C, D: Integer;
+  P1, P2, P3: Integer;
+  Part: string;
+begin
+  Result := False;
+  Addr := 0;
+  P1 := Pos('.', S);
+  if P1 <= 0 then
+    Exit;
+  P2 := Pos('.', Copy(S, P1 + 1, MaxInt));
+  if P2 <= 0 then
+    Exit;
+  Inc(P2, P1);
+  P3 := Pos('.', Copy(S, P2 + 1, MaxInt));
+  if P3 <= 0 then
+    Exit;
+  Inc(P3, P2);
+  Part := Copy(S, 1, P1 - 1);
+  A := StrToIntDef(Part, -1);
+  Part := Copy(S, P1 + 1, P2 - P1 - 1);
+  B := StrToIntDef(Part, -1);
+  Part := Copy(S, P2 + 1, P3 - P2 - 1);
+  C := StrToIntDef(Part, -1);
+  Part := Copy(S, P3 + 1, MaxInt);
+  D := StrToIntDef(Part, -1);
+  if (A < 0) or (A > 255) or (B < 0) or (B > 255) or (C < 0) or (C > 255) or (D < 0) or (D > 255) then
+    Exit;
+  Addr := Cardinal(A shl 24 or B shl 16 or C shl 8 or D);
+  Result := True;
+end;
+
+function CidrMatchIPv4(const RemoteHost: string; const Cidr: string): Boolean;
+var
+  SlashPos: Integer;
+  NetStr, MaskStr: string;
+  NetAddr, RemoteAddr: Cardinal;
+  NetBe, RemBe: Cardinal;
+  Prefix: Integer;
+  Mask: Cardinal;
+begin
+  Result := False;
+  SlashPos := Pos('/', Cidr);
+  if SlashPos > 0 then
+  begin
+    NetStr := Trim(Copy(Cidr, 1, SlashPos - 1));
+    MaskStr := Trim(Copy(Cidr, SlashPos + 1, MaxInt));
+    Prefix := StrToIntDef(MaskStr, -1);
+  end
+  else
+  begin
+    NetStr := Trim(Cidr);
+    Prefix := 32;
+  end;
+  if (Prefix < 0) or (Prefix > 32) then
+    Exit;
+  if not ParseDottedIPv4ToU32(NetStr, NetAddr) then
+    Exit;
+  if not ParseDottedIPv4ToU32(RemoteHost, RemoteAddr) then
+    Exit;
+  NetBe := ((NetAddr and $FF) shl 24) or ((NetAddr shr 8 and $FF) shl 16) or ((NetAddr shr 16 and $FF) shl 8) or (NetAddr shr 24);
+  RemBe := ((RemoteAddr and $FF) shl 24) or ((RemoteAddr shr 8 and $FF) shl 16) or ((RemoteAddr shr 16 and $FF) shl 8) or (RemoteAddr shr 24);
+  if Prefix = 0 then
+    Mask := 0
+  else
+    Mask := Cardinal(not ((Cardinal(1) shl (32 - Prefix)) - 1));
+  Result := (NetBe and Mask) = (RemBe and Mask);
+end;
+
+function TCommandRouter.UdpRemoteAllowed(BusIndex: Integer; const RemoteHost: string): Boolean;
+var
+  I: Integer;
+  Cidr: string;
+begin
+  Result := True;
+  if (BusIndex < 0) or (BusIndex > High(FDeviceConfiguration.ViscaBuses)) then
+    Exit;
+  if Length(FDeviceConfiguration.ViscaBuses[BusIndex].AllowFrom) = 0 then
+    Exit;
+  for I := 0 to High(FDeviceConfiguration.ViscaBuses[BusIndex].AllowFrom) do
+  begin
+    Cidr := Trim(FDeviceConfiguration.ViscaBuses[BusIndex].AllowFrom[I]);
+    if Cidr = '' then
+      Continue;
+    if CidrMatchIPv4(RemoteHost, Cidr) then
+      Exit(True);
+  end;
+  Result := False;
+end;
+
 constructor TCommandRouter.Create(const DeviceConfiguration: TDevicesConfig; ViscaCommandMapping: TViscaMapping;
   AMqtt: THaMqttPublisher);
 var
-  BusLoopIndex, DeviceLoopIndex: Integer;
-  SerialBusIndex: Integer;
+  BusLoopIndex, DeviceLoopIndex, CtlIx: Integer;
+  BusIndex: Integer;
   DeviceGapMs: Cardinal;
+  BusId: string;
+  Cs: string;
 begin
   inherited Create;
   FDeviceConfiguration := DeviceConfiguration;
   FViscaCommandMapping := ViscaCommandMapping;
   FMqtt := AMqtt;
-  SetLength(FSerialPorts, Length(FDeviceConfiguration.Buses));
-  SetLength(FCommandQueuesPerBus, Length(FDeviceConfiguration.Buses));
-  SetLength(FLastTransmitTickPerBus, Length(FDeviceConfiguration.Buses));
-  SetLength(FInterCommandGapMsPerBus, Length(FDeviceConfiguration.Buses));
-  SetLength(FMaxQueueDepthPerBus, Length(FDeviceConfiguration.Buses));
-  SetLength(FRxAccumPerBus, Length(FDeviceConfiguration.Buses));
-  SetLength(FBusTxPhase, Length(FDeviceConfiguration.Buses));
-  SetLength(FInFlightWaitStartTick, Length(FDeviceConfiguration.Buses));
-  SetLength(FInFlightAckTimeoutMs, Length(FDeviceConfiguration.Buses));
-  SetLength(FInFlightSendCount, Length(FDeviceConfiguration.Buses));
-  SetLength(FInFlightPacket, Length(FDeviceConfiguration.Buses));
-  SetLength(FRetryResumeTick, Length(FDeviceConfiguration.Buses));
-  for BusLoopIndex := 0 to High(FDeviceConfiguration.Buses) do
+  SetLength(FSerialPorts, Length(FDeviceConfiguration.ViscaBuses));
+  SetLength(FUdpPorts, Length(FDeviceConfiguration.ViscaBuses));
+  SetLength(FCommandQueuesPerBus, Length(FDeviceConfiguration.ViscaBuses));
+  SetLength(FLastTransmitTickPerBus, Length(FDeviceConfiguration.ViscaBuses));
+  SetLength(FInterCommandGapMsPerBus, Length(FDeviceConfiguration.ViscaBuses));
+  SetLength(FMaxQueueDepthPerBus, Length(FDeviceConfiguration.ViscaBuses));
+  SetLength(FRxAccumPerBus, Length(FDeviceConfiguration.ViscaBuses));
+  SetLength(FBusTxPhase, Length(FDeviceConfiguration.ViscaBuses));
+  SetLength(FInFlightWaitStartTick, Length(FDeviceConfiguration.ViscaBuses));
+  SetLength(FInFlightAckTimeoutMs, Length(FDeviceConfiguration.ViscaBuses));
+  SetLength(FInFlightSendCount, Length(FDeviceConfiguration.ViscaBuses));
+  SetLength(FInFlightPacket, Length(FDeviceConfiguration.ViscaBuses));
+  SetLength(FInFlightUdpHost, Length(FDeviceConfiguration.ViscaBuses));
+  SetLength(FInFlightUdpPort, Length(FDeviceConfiguration.ViscaBuses));
+  SetLength(FRetryResumeTick, Length(FDeviceConfiguration.ViscaBuses));
+  SetLength(FControllerTopicPerBus, Length(FDeviceConfiguration.ViscaBuses));
+  for BusLoopIndex := 0 to High(FDeviceConfiguration.ViscaBuses) do
   begin
     FCommandQueuesPerBus[BusLoopIndex] := TFPList.Create;
     FLastTransmitTickPerBus[BusLoopIndex] := 0;
@@ -341,16 +447,42 @@ begin
     FBusTxPhase[BusLoopIndex] := btpIdle;
     SetLength(FInFlightPacket[BusLoopIndex], 0);
     FInFlightSendCount[BusLoopIndex] := 0;
-    FSerialPorts[BusLoopIndex] := TSerialPort.Create;
-    if not FSerialPorts[BusLoopIndex].Open(FDeviceConfiguration.Buses[BusLoopIndex].Port,
-      FDeviceConfiguration.Buses[BusLoopIndex].Baud, FDeviceConfiguration.Buses[BusLoopIndex].DataBits,
-      FDeviceConfiguration.Buses[BusLoopIndex].Parity, FDeviceConfiguration.Buses[BusLoopIndex].StopBits,
-      FDeviceConfiguration.Buses[BusLoopIndex].Rs485) then
-      LogFmt(llWarn, 'visca: could not open serial bus "%s" (%s)',
-        [FDeviceConfiguration.Buses[BusLoopIndex].Id, FDeviceConfiguration.Buses[BusLoopIndex].Port]);
+    FInFlightUdpHost[BusLoopIndex] := '';
+    FInFlightUdpPort[BusLoopIndex] := 0;
+    FSerialPorts[BusLoopIndex] := nil;
+    FUdpPorts[BusLoopIndex] := nil;
+
+    if SameText(FDeviceConfiguration.ViscaBuses[BusLoopIndex].Transport, 'serial') then
+    begin
+      FSerialPorts[BusLoopIndex] := TSerialPort.Create;
+      if not FSerialPorts[BusLoopIndex].Open(FDeviceConfiguration.ViscaBuses[BusLoopIndex].Port,
+        FDeviceConfiguration.ViscaBuses[BusLoopIndex].Baud, FDeviceConfiguration.ViscaBuses[BusLoopIndex].DataBits,
+        FDeviceConfiguration.ViscaBuses[BusLoopIndex].Parity, FDeviceConfiguration.ViscaBuses[BusLoopIndex].StopBits,
+        FDeviceConfiguration.ViscaBuses[BusLoopIndex].Rs485) then
+        LogFmt(llWarn, 'visca: could not open serial bus "%s" (%s)',
+          [FDeviceConfiguration.ViscaBuses[BusLoopIndex].Id, FDeviceConfiguration.ViscaBuses[BusLoopIndex].Port]);
+    end
+    else
+    begin
+      FUdpPorts[BusLoopIndex] := TUdpViscaPort.Create;
+      if not FUdpPorts[BusLoopIndex].Open(FDeviceConfiguration.ViscaBuses[BusLoopIndex].BindHost,
+        FDeviceConfiguration.ViscaBuses[BusLoopIndex].BindPort) then
+        LogFmt(llWarn, 'visca: could not bind udp bus "%s" (%s:%d)',
+          [FDeviceConfiguration.ViscaBuses[BusLoopIndex].Id, FDeviceConfiguration.ViscaBuses[BusLoopIndex].BindHost,
+          FDeviceConfiguration.ViscaBuses[BusLoopIndex].BindPort]);
+    end;
+
+    BusId := FDeviceConfiguration.ViscaBuses[BusLoopIndex].Id;
+    Cs := '';
+    for CtlIx := 0 to High(FDeviceConfiguration.ViscaControllers) do
+      if SameText(FDeviceConfiguration.ViscaControllers[CtlIx].BusId, BusId) then
+        Cs := FDeviceConfiguration.ViscaControllers[CtlIx].Slug;
+    if Cs = '' then
+      Cs := BusId;
+    FControllerTopicPerBus[BusLoopIndex] := Cs;
   end;
-  SetLength(FLastBusCtrlEventJson, Length(FDeviceConfiguration.Buses));
-  SetLength(FLastBusDeviceReplyJson, Length(FDeviceConfiguration.Buses));
+  SetLength(FLastBusCtrlEventJson, Length(FDeviceConfiguration.ViscaBuses));
+  SetLength(FLastBusDeviceReplyJson, Length(FDeviceConfiguration.ViscaBuses));
   for BusLoopIndex := 0 to High(FLastBusCtrlEventJson) do
   begin
     FLastBusCtrlEventJson[BusLoopIndex] := '';
@@ -375,14 +507,14 @@ begin
   end;
   for DeviceLoopIndex := 0 to High(FDeviceConfiguration.ViscaDevices) do
   begin
-    SerialBusIndex := IndexOfSerialBusByConfigId(FDeviceConfiguration.ViscaDevices[DeviceLoopIndex].BusId);
-    if SerialBusIndex < 0 then
+    BusIndex := IndexOfViscaBusById(FDeviceConfiguration.ViscaDevices[DeviceLoopIndex].BusId);
+    if BusIndex < 0 then
       Continue;
     DeviceGapMs := FDeviceConfiguration.ViscaDevices[DeviceLoopIndex].MinInterCommandMs;
-    if DeviceGapMs > FInterCommandGapMsPerBus[SerialBusIndex] then
-      FInterCommandGapMsPerBus[SerialBusIndex] := DeviceGapMs;
-    if FDeviceConfiguration.ViscaDevices[DeviceLoopIndex].MaxQueueDepth > FMaxQueueDepthPerBus[SerialBusIndex] then
-      FMaxQueueDepthPerBus[SerialBusIndex] := FDeviceConfiguration.ViscaDevices[DeviceLoopIndex].MaxQueueDepth;
+    if DeviceGapMs > FInterCommandGapMsPerBus[BusIndex] then
+      FInterCommandGapMsPerBus[BusIndex] := DeviceGapMs;
+    if FDeviceConfiguration.ViscaDevices[DeviceLoopIndex].MaxQueueDepth > FMaxQueueDepthPerBus[BusIndex] then
+      FMaxQueueDepthPerBus[BusIndex] := FDeviceConfiguration.ViscaDevices[DeviceLoopIndex].MaxQueueDepth;
   end;
 end;
 
@@ -406,17 +538,20 @@ begin
       end;
       QueueList.Free;
     end;
-    FSerialPorts[BusLoopIndex].Free;
+    if FSerialPorts[BusLoopIndex] <> nil then
+      FSerialPorts[BusLoopIndex].Free;
+    if FUdpPorts[BusLoopIndex] <> nil then
+      FUdpPorts[BusLoopIndex].Free;
   end;
   inherited Destroy;
 end;
 
-function TCommandRouter.IndexOfSerialBusByConfigId(const BusId: string): Integer;
+function TCommandRouter.IndexOfViscaBusById(const BusId: string): Integer;
 var
   BusLoopIndex: Integer;
 begin
-  for BusLoopIndex := 0 to High(FDeviceConfiguration.Buses) do
-    if SameText(FDeviceConfiguration.Buses[BusLoopIndex].Id, BusId) then
+  for BusLoopIndex := 0 to High(FDeviceConfiguration.ViscaBuses) do
+    if SameText(FDeviceConfiguration.ViscaBuses[BusLoopIndex].Id, BusId) then
       Exit(BusLoopIndex);
   Result := -1;
 end;
@@ -431,7 +566,7 @@ begin
   Result := -1;
 end;
 
-function TCommandRouter.IndexOfViscaDeviceOnBusByReplyByte(SerialBusIndex: Integer; ReplyFirst: Byte): Integer;
+function TCommandRouter.IndexOfViscaDeviceOnBusByReplyByte(BusIndex: Integer; ReplyFirst: Byte): Integer;
 var
   DevIdx: Integer;
   Expected: Integer;
@@ -443,12 +578,42 @@ begin
   for DevIdx := 0 to High(FDeviceConfiguration.ViscaDevices) do
   begin
     Row := FDeviceConfiguration.ViscaDevices[DevIdx];
-    if IndexOfSerialBusByConfigId(Row.BusId) <> SerialBusIndex then
+    if IndexOfViscaBusById(Row.BusId) <> BusIndex then
       Continue;
     Expected := $90 + Row.ViscaAddress - 1;
     if ReplyFirst = Byte(Expected) then
       Exit(DevIdx);
   end;
+end;
+
+function TCommandRouter.IndexOfUdpDeviceOnBusByRemoteAndId(BusIndex: Integer; const RemoteHost: string; RemotePort: Integer; DeviceID: Integer): Integer;
+var
+  DevIdx: Integer;
+  Row: TViscaDeviceConfig;
+begin
+  Result := -1;
+  if (DeviceID < 1) or (DeviceID > 7) then
+    Exit;
+  for DevIdx := 0 to High(FDeviceConfiguration.ViscaDevices) do
+  begin
+    Row := FDeviceConfiguration.ViscaDevices[DevIdx];
+    if IndexOfViscaBusById(Row.BusId) <> BusIndex then
+      Continue;
+    if not SameText(Row.UdpHost, RemoteHost) then
+      Continue;
+    if Row.UdpPort <> RemotePort then
+      Continue;
+    if Integer(Row.ViscaAddress) <> DeviceID then
+      Continue;
+    Exit(DevIdx);
+  end;
+end;
+
+function TCommandRouter.ControllerTopicSlugForBusIndex(BusIndex: Integer): string;
+begin
+  if (BusIndex < 0) or (BusIndex > High(FControllerTopicPerBus)) then
+    Exit('');
+  Result := FControllerTopicPerBus[BusIndex];
 end;
 
 procedure TCommandRouter.TrimOldestCommandsIfQueueExceedsDepth(SerialBusIndex, DeviceConfigIndex: Integer;
@@ -471,7 +636,7 @@ begin
       if QueuedCommand.DeviceConfigIndex = DeviceConfigIndex then
       begin
         LogFmt(llWarn, 'visca: queue overflow bus %s device %s — dropping oldest',
-          [FDeviceConfiguration.Buses[SerialBusIndex].Id, FDeviceConfiguration.ViscaDevices[DeviceConfigIndex].Slug]);
+          [FDeviceConfiguration.ViscaBuses[SerialBusIndex].Id, FDeviceConfiguration.ViscaDevices[DeviceConfigIndex].Slug]);
         QueueList.Delete(QueueSlotIndex);
         QueuedCommand.Free;
         Dec(DeviceCommandCount);
@@ -486,7 +651,7 @@ var
   SlashInRest: Integer;
   TopicRestAfterDevicePrefix: string;
   TopicSlug, ViscaCommandPath: string;
-  DeviceConfigIndex, SerialBusIndex: Integer;
+  DeviceConfigIndex, BusIndex: Integer;
   QueuedCommand: TQueuedViscaCommand;
   EncodedProbe: TBytes;
   DeviceRow: TViscaDeviceConfig;
@@ -507,8 +672,8 @@ begin
     LogFmt(llDebug, 'visca: unknown device slug in topic %s', [Topic]);
     Exit;
   end;
-  SerialBusIndex := IndexOfSerialBusByConfigId(FDeviceConfiguration.ViscaDevices[DeviceConfigIndex].BusId);
-  if SerialBusIndex < 0 then
+  BusIndex := IndexOfViscaBusById(FDeviceConfiguration.ViscaDevices[DeviceConfigIndex].BusId);
+  if BusIndex < 0 then
   begin
     LogFmt(llWarn, 'visca: device slug %s references unknown bus', [TopicSlug]);
     Exit;
@@ -527,15 +692,15 @@ begin
       TViscaMapping.ViscaPacketToHex(EncodedProbe));
     Exit;
   end;
-  TrimOldestCommandsIfQueueExceedsDepth(SerialBusIndex, DeviceConfigIndex, DeviceRow.MaxQueueDepth);
-  RemoveQueuedCoalesced(SerialBusIndex, DeviceConfigIndex, CoalesceGroupKey(DeviceConfigIndex, ViscaCommandPath));
+  TrimOldestCommandsIfQueueExceedsDepth(BusIndex, DeviceConfigIndex, DeviceRow.MaxQueueDepth);
+  RemoveQueuedCoalesced(BusIndex, DeviceConfigIndex, CoalesceGroupKey(DeviceConfigIndex, ViscaCommandPath));
   QueuedCommand := TQueuedViscaCommand.Create;
   QueuedCommand.DeviceConfigIndex := DeviceConfigIndex;
-  QueuedCommand.SerialBusIndex := SerialBusIndex;
+  QueuedCommand.SerialBusIndex := BusIndex;
   QueuedCommand.MqttTopic := Topic;
   QueuedCommand.ViscaCommandPath := ViscaCommandPath;
   QueuedCommand.MqttPayloadJson := Payload;
-  FCommandQueuesPerBus[SerialBusIndex].Add(QueuedCommand);
+  FCommandQueuesPerBus[BusIndex].Add(QueuedCommand);
 end;
 
 procedure TCommandRouter.ConsumeLeadingBytes(var Buf: TBytes; Count: Integer);
@@ -555,82 +720,131 @@ begin
   SetLength(Buf, NewLen);
 end;
 
-procedure TCommandRouter.DrainSerialIncoming(SerialBusIndex: Integer);
+procedure TCommandRouter.DrainSerialIncoming(BusIndex: Integer);
 var
   I, Start: Integer;
   FrameLen: Integer;
   Frame: TBytes;
   Rv: Integer;
 begin
-  FSerialPorts[SerialBusIndex].TryScheduledReopen(GetTickCount64);
-  if FSerialPorts[SerialBusIndex].SerialFileDescriptor < 0 then
+  if (BusIndex < 0) or (BusIndex > High(FSerialPorts)) or (FSerialPorts[BusIndex] = nil) then
     Exit;
-  Rv := FSerialPorts[SerialBusIndex].ReadNonBlockingAppend(FRxAccumPerBus[SerialBusIndex], 256);
+  FSerialPorts[BusIndex].TryScheduledReopen(GetTickCount64);
+  if FSerialPorts[BusIndex].SerialFileDescriptor < 0 then
+    Exit;
+  Rv := FSerialPorts[BusIndex].ReadNonBlockingAppend(FRxAccumPerBus[BusIndex], 256);
   if Rv < 0 then
   begin
-    AbortInFlight(SerialBusIndex, 'serial_read');
-    FSerialPorts[SerialBusIndex].ScheduleReopen(GetTickCount64);
+    AbortInFlight(BusIndex, 'serial_read');
+    FSerialPorts[BusIndex].ScheduleReopen(GetTickCount64);
     Exit;
   end;
-  if Length(FRxAccumPerBus[SerialBusIndex]) > MaxViscaRxAccum then
+  if Length(FRxAccumPerBus[BusIndex]) > MaxViscaRxAccum then
   begin
-    LogFmt(llWarn, 'visca: rx buffer overflow bus %s — clearing', [FDeviceConfiguration.Buses[SerialBusIndex].Id]);
-    SetLength(FRxAccumPerBus[SerialBusIndex], 0);
+    LogFmt(llWarn, 'visca: rx buffer overflow bus %s — clearing', [FDeviceConfiguration.ViscaBuses[BusIndex].Id]);
+    SetLength(FRxAccumPerBus[BusIndex], 0);
     Exit;
   end;
   Start := 0;
   I := 0;
-  while I <= High(FRxAccumPerBus[SerialBusIndex]) do
+  while I <= High(FRxAccumPerBus[BusIndex]) do
   begin
-    if FRxAccumPerBus[SerialBusIndex][I] = $FF then
+    if FRxAccumPerBus[BusIndex][I] = $FF then
     begin
       FrameLen := I - Start + 1;
       SetLength(Frame, FrameLen);
       if FrameLen > 0 then
-        Move(FRxAccumPerBus[SerialBusIndex][Start], Frame[0], FrameLen);
-      HandleCompleteViscaFrame(SerialBusIndex, Frame);
+        Move(FRxAccumPerBus[BusIndex][Start], Frame[0], FrameLen);
+      HandleCompleteViscaFrame(BusIndex, Frame);
       Start := I + 1;
     end;
     Inc(I);
   end;
   if Start > 0 then
-    ConsumeLeadingBytes(FRxAccumPerBus[SerialBusIndex], Start);
+    ConsumeLeadingBytes(FRxAccumPerBus[BusIndex], Start);
 end;
 
-procedure TCommandRouter.PublishControllerSemantic(const BusId, DeviceSlug, CommandPath, PayloadJson, HexTrace: string);
+procedure TCommandRouter.DrainUdpIncoming(BusIndex: Integer);
+var
+  Data, Frame: TBytes;
+  RemoteHost: string;
+  RemotePort: Integer;
+  I, Start, FrameLen: Integer;
+begin
+  if (BusIndex < 0) or (BusIndex > High(FUdpPorts)) or (FUdpPorts[BusIndex] = nil) then
+    Exit;
+  while FUdpPorts[BusIndex].RecvDatagram(Data, RemoteHost, RemotePort) do
+  begin
+    if not UdpRemoteAllowed(BusIndex, RemoteHost) then
+      Continue;
+    Start := 0;
+    I := 0;
+    while I <= High(Data) do
+    begin
+      if Data[I] = $FF then
+      begin
+        FrameLen := I - Start + 1;
+        if FrameLen > 0 then
+        begin
+          SetLength(Frame, FrameLen);
+          Move(Data[Start], Frame[0], FrameLen);
+          HandleCompleteViscaFrame(BusIndex, Frame, RemoteHost, RemotePort);
+        end;
+        Start := I + 1;
+      end;
+      Inc(I);
+    end;
+  end;
+end;
+
+procedure TCommandRouter.PublishControllerSemantic(const BusId, ControllerSlug: string; const DeviceSlugOrEmpty: string;
+  const CommandPath, PayloadJson, HexTrace: string; const RemoteHost: string; RemotePort: Integer);
 var
   Js: string;
   Ts: Int64;
   BusIx: Integer;
+  DeviceSlugJson: string;
+  TraceExtra: string;
 begin
   if FMqtt = nil then
     Exit;
   Ts := Int64(DateTimeToUnix(Now, True)) * 1000;
-  Js := Format('{"ts":%d,"bus":%s,"source":"controller","command":%s,"deviceSlug":%s,"payload":%s,"trace":{"viscaHex":%s}}',
-    [Ts, JsonQuote(BusId), JsonQuote(CommandPath), JsonQuote(DeviceSlug), PayloadJson, JsonQuote(HexTrace)]);
-  FMqtt.PublishJson('controller/' + BusId + '/event', Js);
-  BusIx := IndexOfSerialBusByConfigId(BusId);
+  if Trim(DeviceSlugOrEmpty) = '' then
+    DeviceSlugJson := 'null'
+  else
+    DeviceSlugJson := JsonQuote(DeviceSlugOrEmpty);
+  TraceExtra := '';
+  if (Trim(RemoteHost) <> '') and (RemotePort > 0) then
+    TraceExtra := Format(',"transport":"udp","remoteHost":%s,"remotePort":%d', [JsonQuote(RemoteHost), RemotePort]);
+  Js := Format('{"ts":%d,"bus":%s,"source":"controller","command":%s,"deviceSlug":%s,"payload":%s,"trace":{"viscaHex":%s%s}}',
+    [Ts, JsonQuote(BusId), JsonQuote(CommandPath), DeviceSlugJson, PayloadJson, JsonQuote(HexTrace), TraceExtra]);
+  FMqtt.PublishJson('controller/' + ControllerSlug + '/event', Js);
+  BusIx := IndexOfViscaBusById(BusId);
   if BusIx >= 0 then
   begin
     FLastBusCtrlEventJson[BusIx] := Format('{"deviceSlug":%s,"command":%s,"payload":%s,"viscaHex":%s}',
-      [JsonQuote(DeviceSlug), JsonQuote(CommandPath), PayloadJson, JsonQuote(HexTrace)]);
+      [DeviceSlugJson, JsonQuote(CommandPath), PayloadJson, JsonQuote(HexTrace)]);
     PublishControllerBusSnapshot(BusIx);
   end;
 end;
 
-procedure TCommandRouter.PublishControllerRawEvent(const BusId, HexTrace: string);
+procedure TCommandRouter.PublishControllerRawEvent(const BusId, ControllerSlug, HexTrace: string; const RemoteHost: string; RemotePort: Integer);
 var
   Js: string;
   Ts: Int64;
   BusIx: Integer;
+  TraceExtra: string;
 begin
   if FMqtt = nil then
     Exit;
   Ts := Int64(DateTimeToUnix(Now, True)) * 1000;
-  Js := Format('{"ts":%d,"bus":%s,"source":"controller","command":"event","payload":{"raw":true,"viscaHex":%s},"trace":{"viscaHex":%s}}',
-    [Ts, JsonQuote(BusId), JsonQuote(HexTrace), JsonQuote(HexTrace)]);
-  FMqtt.PublishJson('controller/' + BusId + '/event', Js);
-  BusIx := IndexOfSerialBusByConfigId(BusId);
+  TraceExtra := '';
+  if (Trim(RemoteHost) <> '') and (RemotePort > 0) then
+    TraceExtra := Format(',"transport":"udp","remoteHost":%s,"remotePort":%d', [JsonQuote(RemoteHost), RemotePort]);
+  Js := Format('{"ts":%d,"bus":%s,"source":"controller","command":"event","payload":{"raw":true,"viscaHex":%s},"trace":{"viscaHex":%s%s}}',
+    [Ts, JsonQuote(BusId), JsonQuote(HexTrace), JsonQuote(HexTrace), TraceExtra]);
+  FMqtt.PublishJson('controller/' + ControllerSlug + '/event', Js);
+  BusIx := IndexOfViscaBusById(BusId);
   if BusIx >= 0 then
   begin
     FLastBusCtrlEventJson[BusIx] := Format('{"command":"event","payload":{"raw":true,"viscaHex":%s},"viscaHex":%s}',
@@ -639,28 +853,30 @@ begin
   end;
 end;
 
-procedure TCommandRouter.PublishControllerBusSnapshot(SerialBusIndex: Integer);
+procedure TCommandRouter.PublishControllerBusSnapshot(BusIndex: Integer);
 var
   BusId: string;
   Ts: Int64;
   Ctrl, Devp, Js: string;
+  CSlug: string;
 begin
   if FMqtt = nil then
     Exit;
-  if (SerialBusIndex < 0) or (SerialBusIndex > High(FDeviceConfiguration.Buses)) then
+  if (BusIndex < 0) or (BusIndex > High(FDeviceConfiguration.ViscaBuses)) then
     Exit;
-  BusId := FDeviceConfiguration.Buses[SerialBusIndex].Id;
+  BusId := FDeviceConfiguration.ViscaBuses[BusIndex].Id;
+  CSlug := ControllerTopicSlugForBusIndex(BusIndex);
   Ts := Int64(DateTimeToUnix(Now, True)) * 1000;
-  if FLastBusCtrlEventJson[SerialBusIndex] = '' then
+  if FLastBusCtrlEventJson[BusIndex] = '' then
     Ctrl := 'null'
   else
-    Ctrl := FLastBusCtrlEventJson[SerialBusIndex];
-  if FLastBusDeviceReplyJson[SerialBusIndex] = '' then
+    Ctrl := FLastBusCtrlEventJson[BusIndex];
+  if FLastBusDeviceReplyJson[BusIndex] = '' then
     Devp := 'null'
   else
-    Devp := FLastBusDeviceReplyJson[SerialBusIndex];
+    Devp := FLastBusDeviceReplyJson[BusIndex];
   Js := Format('{"ts":%d,"bus":%s,"lastController":%s,"lastDeviceReply":%s}', [Ts, JsonQuote(BusId), Ctrl, Devp]);
-  FMqtt.PublishJson('controller/' + BusId + '/status', Js);
+  FMqtt.PublishJson('controller/' + CSlug + '/status', Js);
 end;
 
 procedure TCommandRouter.PublishDeviceTelemetry(const DeviceSlug, Kind, HexTrace: string; const DecodeJsonObject: string);
@@ -859,8 +1075,16 @@ begin
     Exit;
   if NowTick < FLastTransmitTickPerBus[SerialBusIndex] + FInterCommandGapMsPerBus[SerialBusIndex] then
     Exit;
-  if FSerialPorts[SerialBusIndex].SerialFileDescriptor < 0 then
-    Exit;
+  if SameText(FDeviceConfiguration.ViscaBuses[SerialBusIndex].Transport, 'serial') then
+  begin
+    if (FSerialPorts[SerialBusIndex] = nil) or (FSerialPorts[SerialBusIndex].SerialFileDescriptor < 0) then
+      Exit;
+  end
+  else
+  begin
+    if (FUdpPorts[SerialBusIndex] = nil) or (not FUdpPorts[SerialBusIndex].IsOpen) then
+      Exit;
+  end;
   Head := TQueuedViscaCommand(FCommandQueuesPerBus[SerialBusIndex][0]);
   DeviceRow := FDeviceConfiguration.ViscaDevices[Head.DeviceConfigIndex];
   ViscaPacket := FViscaCommandMapping.EncodeViscaCommand(DeviceRow.Model, DeviceRow.ViscaAddress,
@@ -882,14 +1106,30 @@ begin
   end;
   FInFlightPacket[SerialBusIndex] := Copy(ViscaPacket, 0, Length(ViscaPacket));
   FInFlightSendCount[SerialBusIndex] := 0;
-  if not FSerialPorts[SerialBusIndex].QueueTransmit(FInFlightPacket[SerialBusIndex]) then
+  if SameText(FDeviceConfiguration.ViscaBuses[SerialBusIndex].Transport, 'serial') then
   begin
-    LogFmt(llWarn, 'visca: TX queue overflow bus %s', [FDeviceConfiguration.Buses[SerialBusIndex].Id]);
-    PublishDeviceCommandAck(DeviceRow.Slug, Head.MqttTopic, Head.ViscaCommandPath, False, 'tx_queue', 0, '', '');
-    PopQueueHead(SerialBusIndex);
-    SetLength(FInFlightPacket[SerialBusIndex], 0);
-    FLastTransmitTickPerBus[SerialBusIndex] := NowTick;
-    Exit;
+    if not FSerialPorts[SerialBusIndex].QueueTransmit(FInFlightPacket[SerialBusIndex]) then
+    begin
+      LogFmt(llWarn, 'visca: TX queue overflow bus %s', [FDeviceConfiguration.ViscaBuses[SerialBusIndex].Id]);
+      PublishDeviceCommandAck(DeviceRow.Slug, Head.MqttTopic, Head.ViscaCommandPath, False, 'tx_queue', 0, '', '');
+      PopQueueHead(SerialBusIndex);
+      SetLength(FInFlightPacket[SerialBusIndex], 0);
+      FLastTransmitTickPerBus[SerialBusIndex] := NowTick;
+      Exit;
+    end;
+  end
+  else
+  begin
+    FInFlightUdpHost[SerialBusIndex] := DeviceRow.UdpHost;
+    FInFlightUdpPort[SerialBusIndex] := DeviceRow.UdpPort;
+    if (Trim(FInFlightUdpHost[SerialBusIndex]) = '') or (FInFlightUdpPort[SerialBusIndex] <= 0) then
+    begin
+      PublishDeviceCommandAck(DeviceRow.Slug, Head.MqttTopic, Head.ViscaCommandPath, False, 'udp_dest', 0, '', '');
+      PopQueueHead(SerialBusIndex);
+      SetLength(FInFlightPacket[SerialBusIndex], 0);
+      FLastTransmitTickPerBus[SerialBusIndex] := NowTick;
+      Exit;
+    end;
   end;
   FBusTxPhase[SerialBusIndex] := btpDrainingTx;
 end;
@@ -903,14 +1143,25 @@ begin
       MaybeStartHeadCommand(SerialBusIndex, NowTick);
     btpDrainingTx:
       begin
-        Pr := FSerialPorts[SerialBusIndex].PumpTransmit;
-        case Pr of
-          sprDone:
-            OnDrainingComplete(SerialBusIndex, NowTick);
-          sprError:
-            AbortInFlight(SerialBusIndex, 'serial_write');
+        if SameText(FDeviceConfiguration.ViscaBuses[SerialBusIndex].Transport, 'serial') then
+        begin
+          Pr := FSerialPorts[SerialBusIndex].PumpTransmit;
+          case Pr of
+            sprDone:
+              OnDrainingComplete(SerialBusIndex, NowTick);
+            sprError:
+              AbortInFlight(SerialBusIndex, 'serial_write');
+          else
+            ;
+          end;
+        end
         else
-          ;
+        begin
+          if FUdpPorts[SerialBusIndex].SendTo(FInFlightPacket[SerialBusIndex], FInFlightUdpHost[SerialBusIndex],
+            FInFlightUdpPort[SerialBusIndex]) then
+            OnDrainingComplete(SerialBusIndex, NowTick)
+          else
+            AbortInFlight(SerialBusIndex, 'udp_send');
         end;
       end;
     btpWaitReply:
@@ -919,19 +1170,23 @@ begin
     btpBackoffRetry:
       if NowTick >= FRetryResumeTick[SerialBusIndex] then
       begin
-        if not FSerialPorts[SerialBusIndex].QueueTransmit(FInFlightPacket[SerialBusIndex]) then
+        if SameText(FDeviceConfiguration.ViscaBuses[SerialBusIndex].Transport, 'serial') then
         begin
-          AbortInFlight(SerialBusIndex, 'tx_queue');
-          Exit;
+          if not FSerialPorts[SerialBusIndex].QueueTransmit(FInFlightPacket[SerialBusIndex]) then
+          begin
+            AbortInFlight(SerialBusIndex, 'tx_queue');
+            Exit;
+          end;
         end;
         FBusTxPhase[SerialBusIndex] := btpDrainingTx;
       end;
   end;
 end;
 
-procedure TCommandRouter.HandleCompleteViscaFrame(SerialBusIndex: Integer; const Frame: TBytes);
+procedure TCommandRouter.HandleCompleteViscaFrame(BusIndex: Integer; const Frame: TBytes; const RemoteHost: string; RemotePort: Integer);
 var
   BusId: string;
+  ControllerSlug: string;
   B0: Byte;
   DevIdx: Integer;
   Row: TViscaDeviceConfig;
@@ -942,47 +1197,70 @@ var
   CtrlJson: string;
   EncodedProbe: TBytes;
   Dec: string;
+  DeviceID: Integer;
+  MatchCount: Integer;
+  MatchedDev: Integer;
 begin
   if Length(Frame) < 2 then
     Exit;
-  BusId := FDeviceConfiguration.Buses[SerialBusIndex].Id;
+  BusId := FDeviceConfiguration.ViscaBuses[BusIndex].Id;
+  ControllerSlug := ControllerTopicSlugForBusIndex(BusIndex);
   HexStr := TViscaMapping.ViscaPacketToHex(Frame);
   B0 := Frame[0];
   if (B0 >= $81) and (B0 <= $87) then
   begin
+    DeviceID := Integer(B0) - $80;
+    MatchCount := 0;
+    MatchedDev := -1;
     for DevIdx := 0 to High(FDeviceConfiguration.ViscaDevices) do
     begin
       Row := FDeviceConfiguration.ViscaDevices[DevIdx];
-      if IndexOfSerialBusByConfigId(Row.BusId) <> SerialBusIndex then
+      if IndexOfViscaBusById(Row.BusId) <> BusIndex then
         Continue;
-      Expected := $80 + Row.ViscaAddress;
-      if Integer(B0) <> Expected then
+      if Integer(Row.ViscaAddress) <> DeviceID then
         Continue;
-      if FViscaCommandMapping.TryDecodeControllerPacket(Row.Model, Frame, TopicPath, PayloadJson) then
-      begin
-        PublishControllerSemantic(BusId, Row.Slug, TopicPath, PayloadJson, HexStr);
-        CtrlJson := Format('{"command":%s,"payload":%s,"viscaHex":%s}', [JsonQuote(TopicPath), PayloadJson, JsonQuote(HexStr)]);
-        FLastControllerJson[DevIdx] := CtrlJson;
-        EncodedProbe := FViscaCommandMapping.EncodeViscaCommand(Row.Model, Row.ViscaAddress, TopicPath, PayloadJson);
-        if Length(EncodedProbe) > 0 then
-          RememberBridgeWireAndState(DevIdx, TopicPath, PayloadJson, EncodedProbe);
-      end
-      else
-      begin
-        PublishControllerRawEvent(BusId, HexStr);
-        CtrlJson := Format('{"command":"event","payload":{"viscaHex":%s},"viscaHex":%s}', [JsonQuote(HexStr), JsonQuote(HexStr)]);
-        FLastControllerJson[DevIdx] := CtrlJson;
-      end;
-      PublishDeviceStatusMerge(Row.Slug, DevIdx);
-      Exit;
+      Inc(MatchCount);
+      MatchedDev := DevIdx;
     end;
-    LogFmt(llDebug, 'visca: controller frame %s on bus %s — no device for address byte %02x', [HexStr, BusId, B0]);
-    PublishControllerRawEvent(BusId, HexStr);
+    if MatchCount = 1 then
+    begin
+      DevIdx := MatchedDev;
+      Row := FDeviceConfiguration.ViscaDevices[DevIdx];
+      Expected := $80 + Row.ViscaAddress;
+      if Integer(B0) = Expected then
+      begin
+        if FViscaCommandMapping.TryDecodeControllerPacket(Row.Model, Frame, TopicPath, PayloadJson) then
+        begin
+          PublishControllerSemantic(BusId, ControllerSlug, Row.Slug, TopicPath, PayloadJson, HexStr, RemoteHost, RemotePort);
+          CtrlJson := Format('{"command":%s,"payload":%s,"viscaHex":%s}', [JsonQuote(TopicPath), PayloadJson, JsonQuote(HexStr)]);
+          FLastControllerJson[DevIdx] := CtrlJson;
+          EncodedProbe := FViscaCommandMapping.EncodeViscaCommand(Row.Model, Row.ViscaAddress, TopicPath, PayloadJson);
+          if Length(EncodedProbe) > 0 then
+            RememberBridgeWireAndState(DevIdx, TopicPath, PayloadJson, EncodedProbe);
+        end
+        else
+        begin
+          PublishControllerRawEvent(BusId, ControllerSlug, HexStr, RemoteHost, RemotePort);
+          CtrlJson := Format('{"command":"event","payload":{"viscaHex":%s},"viscaHex":%s}', [JsonQuote(HexStr), JsonQuote(HexStr)]);
+          FLastControllerJson[DevIdx] := CtrlJson;
+        end;
+        PublishDeviceStatusMerge(Row.Slug, DevIdx);
+        Exit;
+      end;
+    end;
+    LogFmt(llDebug, 'visca: controller frame %s on bus %s — ambiguous or unknown address %02x', [HexStr, BusId, B0]);
+    PublishControllerRawEvent(BusId, ControllerSlug, HexStr, RemoteHost, RemotePort);
     Exit;
   end;
   if (B0 >= $90) and (B0 <= $96) then
   begin
-    DevIdx := IndexOfViscaDeviceOnBusByReplyByte(SerialBusIndex, B0);
+    if SameText(FDeviceConfiguration.ViscaBuses[BusIndex].Transport, 'udp') then
+    begin
+      DeviceID := Integer(B0) - $90 + 1;
+      DevIdx := IndexOfUdpDeviceOnBusByRemoteAndId(BusIndex, RemoteHost, RemotePort, DeviceID);
+    end
+    else
+      DevIdx := IndexOfViscaDeviceOnBusByReplyByte(BusIndex, B0);
     if DevIdx < 0 then
     begin
       LogFmt(llDebug, 'visca: reply %s on bus %s — no matching device', [HexStr, BusId]);
@@ -1001,19 +1279,19 @@ begin
       else
         Kind := 'data';
     end;
-    TryFinalizeInFlightFromReply(SerialBusIndex, DevIdx, Kind, HexStr);
+    TryFinalizeInFlightFromReply(BusIndex, DevIdx, Kind, HexStr);
     Dec := TryDeviceReplyDecodeJson(Frame, Kind);
     if Dec <> '' then
       FLastReplyJson[DevIdx] := Format('{"kind":%s,"viscaHex":%s,"decode":%s}', [JsonQuote(Kind), JsonQuote(HexStr), Dec])
     else
       FLastReplyJson[DevIdx] := Format('{"kind":%s,"viscaHex":%s}', [JsonQuote(Kind), JsonQuote(HexStr)]);
     if Dec <> '' then
-      FLastBusDeviceReplyJson[SerialBusIndex] := Format('{"deviceSlug":%s,"kind":%s,"viscaHex":%s,"decode":%s}',
+      FLastBusDeviceReplyJson[BusIndex] := Format('{"deviceSlug":%s,"kind":%s,"viscaHex":%s,"decode":%s}',
         [JsonQuote(FDeviceConfiguration.ViscaDevices[DevIdx].Slug), JsonQuote(Kind), JsonQuote(HexStr), Dec])
     else
-      FLastBusDeviceReplyJson[SerialBusIndex] := Format('{"deviceSlug":%s,"kind":%s,"viscaHex":%s}',
+      FLastBusDeviceReplyJson[BusIndex] := Format('{"deviceSlug":%s,"kind":%s,"viscaHex":%s}',
         [JsonQuote(FDeviceConfiguration.ViscaDevices[DevIdx].Slug), JsonQuote(Kind), JsonQuote(HexStr)]);
-    PublishControllerBusSnapshot(SerialBusIndex);
+    PublishControllerBusSnapshot(BusIndex);
     PublishDeviceTelemetry(FDeviceConfiguration.ViscaDevices[DevIdx].Slug, Kind, HexStr, Dec);
     PublishDeviceStatusMerge(FDeviceConfiguration.ViscaDevices[DevIdx].Slug, DevIdx);
     Exit;
@@ -1023,14 +1301,17 @@ end;
 
 procedure TCommandRouter.Tick;
 var
-  SerialBusIndex: Integer;
+  BusIndex: Integer;
   NowTick: QWord;
 begin
   NowTick := GetTickCount64;
-  for SerialBusIndex := 0 to High(FSerialPorts) do
+  for BusIndex := 0 to High(FCommandQueuesPerBus) do
   begin
-    DrainSerialIncoming(SerialBusIndex);
-    AdvanceBusTransmission(SerialBusIndex, NowTick);
+    if SameText(FDeviceConfiguration.ViscaBuses[BusIndex].Transport, 'serial') then
+      DrainSerialIncoming(BusIndex)
+    else
+      DrainUdpIncoming(BusIndex);
+    AdvanceBusTransmission(BusIndex, NowTick);
   end;
 end;
 

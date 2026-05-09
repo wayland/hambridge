@@ -20,6 +20,12 @@ Notable changes to **HaMBridge** (this repository). Release history for packagin
 
 - **Evdev endpoints enforcement** — Linux input is configured via an `evdev` bus (`transport: none`, `protocol: evdev`, `protocol_config.enabled: true`) and `endpoints[]` controller rows (`match.protocol: evdev`). Validation now enforces `protocol_config.enabled: true` for evdev buses.
 
+## [0.4.4] — 2026-05-09
+
+### Added
+
+- **VISCA over UDP** — `buses` may use `transport: udp` + `protocol: visca` with `transport_configuration.bindHost`/`bindPort`. Device endpoints resolve `udpHost`/`udpPort` (or bus `defaultUdpHost`/`defaultUdpPort`). Replies are correlated using `(bus, remoteHost, remotePort, deviceID)` with strict must-match semantics. Controller ingest publishes on `controller/<slug>/event` (one `match.protocol: visca` controller endpoint per UDP bus).
+
 ## [0.4.0] — 2026-05-09
 
 ### Changed

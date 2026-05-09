@@ -86,13 +86,15 @@ This file lists **planned or deferred work** compared to [`docs/developers/Speci
 
 ## v0.4.4 — VISCA over UDP
 
-**Intent:** add VISCA over UDP transport so HaMBridge can talk to devices that expose VISCA over IP (e.g. as supported by Bitfocus Companion’s Sony VISCA connection: `https://bitfocus.io/connections/sony-visca`).
+**Shipped:** VISCA frames can be sent/received over UDP using **`transport: udp`** + **`protocol: visca`** buses,
+with **`endpoints[]`** selecting per-device **`udpHost`/`udpPort`** (or bus defaults) and strict reply correlation
+per **`Specification.md` §3.4.
 
 ### VISCA over UDP Checklist
 
-- [ ] **UDP transport** — send/receive VISCA frames over UDP (socket lifecycle, timeouts, and retry semantics).
-- [ ] **Per-device UDP endpoints** — allow selecting UDP host/port per device in **`hambridge.yaml`** alongside serial buses.
-- [ ] **Telemetry/status parity** — keep `device/<slug>/telemetry`, `device/<slug>/status`, and `device/<slug>/commandAck` semantics consistent across serial vs UDP transports.
+- [x] **UDP transport** — send/receive VISCA frames over UDP (socket lifecycle, timeouts, and retry semantics).
+- [x] **Per-device UDP endpoints** — allow selecting UDP host/port per device in **`hambridge.yaml`** alongside serial buses.
+- [x] **Telemetry/status parity** — keep `device/<slug>/telemetry`, `device/<slug>/status`, and `device/<slug>/commandAck` semantics consistent across serial vs UDP transports.
 
 ### VISCA over UDP — Decisions (documented in `Specification.md` §3.4)
 
