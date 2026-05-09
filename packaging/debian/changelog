@@ -1,3 +1,10 @@
+hambridge (0.4.1-1) unstable; urgency=medium
+
+  * v0.4.1: buses schema enforcement (transport/protocol + transport_configuration; protocol_config
+    validated as object); protocol=visca only for now.
+
+ -- Tim Nelson <wayland@wayland.id.au>  Sat, 09 May 2026 13:50:00 +0000
+
 hambridge (0.4.0-1) unstable; urgency=medium
 
   * v0.4.0: unified hambridge.yaml (+ YAML VISCA mapping), single --config discovery per

@@ -30,6 +30,8 @@ type
 
   TSerialBusConfig = record
     Id: string;
+    Transport: string;
+    Protocol: string;
     Port: string;
     Baud: Integer;
     DataBits: Integer;
@@ -165,7 +167,8 @@ var
   I: Integer;
   Name: string;
   Row, Rs485Obj, Tc: TJSONObject;
-  Transport: string;
+  Transport, Protocol: string;
+  Pc: TJSONData;
 begin
   SetLength(Buses, 0);
   BObj := ObjGetObjectCI(Root, 'buses');
@@ -179,15 +182,29 @@ begin
     if not (BObj.Items[I] is TJSONObject) then
       raise Exception.Create('hambridge.yaml: buses.' + Name + ' must be an object');
     Row := TJSONObject(BObj.Items[I]);
-    Transport := LowerCase(Trim(JsonGetString(Row, 'transport', '')));
+    Transport := Trim(JsonGetString(Row, 'transport', ''));
+    Protocol := Trim(JsonGetString(Row, 'protocol', ''));
     if Transport = '' then
-      Transport := 'serial';
+      raise Exception.Create('hambridge.yaml: bus "' + Name + '" must set transport (e.g. "serial")');
+    if Protocol = '' then
+      raise Exception.Create('hambridge.yaml: bus "' + Name + '" must set protocol (e.g. "visca")');
+
+    Buses[I].Transport := LowerCase(Transport);
+    Buses[I].Protocol := LowerCase(Protocol);
+    Pc := ObjFindCI(Row, 'protocol_config');
+    if (Pc <> nil) and (not (Pc is TJSONObject)) then
+      raise Exception.Create('hambridge.yaml: bus "' + Name + '" protocol_config must be an object when present');
+
+    Transport := Buses[I].Transport;
     if SameText(Transport, 'udp') then
       raise Exception.Create('hambridge.yaml: bus "' + Name +
         '" uses UDP (not implemented in this build; use transport: serial or remove UDP buses)');
     if not SameText(Transport, 'serial') then
       raise Exception.Create('hambridge.yaml: bus "' + Name + '" has unsupported transport "' +
-        JsonGetString(Row, 'transport', '') + '" (supported: serial)');
+        Transport + '" (supported: serial)');
+    if not SameText(Buses[I].Protocol, 'visca') then
+      raise Exception.Create('hambridge.yaml: bus "' + Name + '" has unsupported protocol "' +
+        Protocol + '" (supported: visca)');
 
     Tc := ObjGetObjectCI(Row, 'transport_configuration');
     if Tc <> nil then

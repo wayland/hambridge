@@ -16,7 +16,7 @@ uses
   viscamapping, commandrouter;
 
 const
-  AppVersion = '0.4.0';
+  AppVersion = '0.4.1';
 
 var
   GStop: Boolean = False;

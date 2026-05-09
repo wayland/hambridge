@@ -2,6 +2,12 @@
 
 Notable changes to **HaMBridge** (this repository). Release history for packaging metadata remains in `packaging/debian/changelog` (Debian) and the RPM spec where required by those formats.
 
+## [0.4.1] — 2026-05-09
+
+### Changed
+
+- **Bus schema enforcement** — `buses.<id>` requires `transport` + `protocol`, validates `protocol_config` (if present) is an object, and reads serial settings from `transport_configuration`.
+
 ## [0.4.0] — 2026-05-09
 
 ### Changed
