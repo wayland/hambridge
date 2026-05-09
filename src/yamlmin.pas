@@ -267,7 +267,7 @@ end;
 
 function IsArrayKey(const Key: string): Boolean;
 begin
-  Result := SameText(Key, 'devices') or SameText(Key, 'inputs');
+  Result := SameText(Key, 'devices') or SameText(Key, 'inputs') or SameText(Key, 'endpoints');
 end;
 
 procedure ParseDashLine(var Stack: TStack; D: Integer; const AfterDash: string; LineNo: Integer);

@@ -40,6 +40,13 @@ type
     Rs485: TRs485BusConfig;
   end;
 
+  TBusMeta = record
+    Id: string;
+    Transport: string;
+    Protocol: string;
+    ProtocolConfig: TJSONObject; { shallow reference while loading; not stored long-term }
+  end;
+
   TViscaDeviceConfig = record
     Slug: string;              { MQTT topic segment: device/<slug>/<command> }
     Model: string;
@@ -55,11 +62,16 @@ type
 
   TSerialBusDyn = array of TSerialBusConfig;
   TViscaDeviceDyn = array of TViscaDeviceConfig;
+  TBusMetaDyn = array of TBusMeta;
+  TEvdevInputDyn = array of TEvdevInputConfig;
 
   TDevicesConfig = record
     EvdevEnabled: Boolean;
-    EvdevInputs: array of TEvdevInputConfig;
+    EvdevInputs: TEvdevInputDyn;
+    { Serial VISCA buses only (transport=serial, protocol=visca). }
     Buses: TSerialBusDyn;
+    { Metadata for all buses under hambridge.yaml buses.* (serial/udp/none). }
+    BusMeta: TBusMetaDyn;
     ViscaDevices: TViscaDeviceDyn;
     ViscaMappingPath: string;
   end;
@@ -164,21 +176,20 @@ end;
 procedure LoadBuses(Root: TJSONObject; var Buses: TSerialBusDyn);
 var
   BObj: TJSONObject;
-  I: Integer;
+  I, OutCount: Integer;
   Name: string;
   Row, Rs485Obj, Tc: TJSONObject;
   Transport, Protocol: string;
-  Pc: TJSONData;
 begin
   SetLength(Buses, 0);
   BObj := ObjGetObjectCI(Root, 'buses');
   if BObj = nil then
     Exit;
-  SetLength(Buses, BObj.Count);
+  SetLength(Buses, BObj.Count); { maximum; shrink after filtering }
+  OutCount := 0;
   for I := 0 to BObj.Count - 1 do
   begin
     Name := BObj.Names[I];
-    Buses[I].Id := Name;
     if not (BObj.Items[I] is TJSONObject) then
       raise Exception.Create('hambridge.yaml: buses.' + Name + ' must be an object');
     Row := TJSONObject(BObj.Items[I]);
@@ -189,122 +200,218 @@ begin
     if Protocol = '' then
       raise Exception.Create('hambridge.yaml: bus "' + Name + '" must set protocol (e.g. "visca")');
 
-    Buses[I].Transport := LowerCase(Transport);
-    Buses[I].Protocol := LowerCase(Protocol);
-    Pc := ObjFindCI(Row, 'protocol_config');
-    if (Pc <> nil) and (not (Pc is TJSONObject)) then
+    Transport := LowerCase(Transport);
+    Protocol := LowerCase(Protocol);
+    if (ObjFindCI(Row, 'protocol_config') <> nil) and (not (ObjFindCI(Row, 'protocol_config') is TJSONObject)) then
       raise Exception.Create('hambridge.yaml: bus "' + Name + '" protocol_config must be an object when present');
 
-    Transport := Buses[I].Transport;
-    if SameText(Transport, 'udp') then
-      raise Exception.Create('hambridge.yaml: bus "' + Name +
-        '" uses UDP (not implemented in this build; use transport: serial or remove UDP buses)');
-    if not SameText(Transport, 'serial') then
-      raise Exception.Create('hambridge.yaml: bus "' + Name + '" has unsupported transport "' +
-        Transport + '" (supported: serial)');
-    if not SameText(Buses[I].Protocol, 'visca') then
-      raise Exception.Create('hambridge.yaml: bus "' + Name + '" has unsupported protocol "' +
-        Protocol + '" (supported: visca)');
+    { Only serial/visca buses are turned into TSerialBusConfig entries for the current VISCA router.
+      Other buses (udp/visca, none/evdev, future) are validated and stored in BusMeta. }
+    if SameText(Transport, 'serial') and SameText(Protocol, 'visca') then
+    begin
+      Buses[OutCount].Id := Name;
+      Buses[OutCount].Transport := Transport;
+      Buses[OutCount].Protocol := Protocol;
 
-    Tc := ObjGetObjectCI(Row, 'transport_configuration');
-    if Tc <> nil then
-    begin
-      Buses[I].Port := JsonGetString(Tc, 'port', '');
-      Buses[I].Baud := JsonGetInt(Tc, 'baud', 9600);
-      Buses[I].DataBits := JsonGetInt(Tc, 'dataBits', 8);
-      Buses[I].Parity := JsonGetChar(Tc, 'parity', 'N');
-      Buses[I].StopBits := JsonGetInt(Tc, 'stopBits', 1);
-      FillChar(Buses[I].Rs485, SizeOf(Buses[I].Rs485), 0);
-      Rs485Obj := ObjGetObjectCI(Tc, 'rs485');
-    end
-    else
-    begin
-      Buses[I].Port := JsonGetString(Row, 'port', '');
-      Buses[I].Baud := JsonGetInt(Row, 'baud', 9600);
-      Buses[I].DataBits := JsonGetInt(Row, 'dataBits', 8);
-      Buses[I].Parity := JsonGetChar(Row, 'parity', 'N');
-      Buses[I].StopBits := JsonGetInt(Row, 'stopBits', 1);
-      FillChar(Buses[I].Rs485, SizeOf(Buses[I].Rs485), 0);
-      Rs485Obj := ObjGetObjectCI(Row, 'rs485');
+      Tc := ObjGetObjectCI(Row, 'transport_configuration');
+      if Tc <> nil then
+      begin
+        Buses[OutCount].Port := JsonGetString(Tc, 'port', '');
+        Buses[OutCount].Baud := JsonGetInt(Tc, 'baud', 9600);
+        Buses[OutCount].DataBits := JsonGetInt(Tc, 'dataBits', 8);
+        Buses[OutCount].Parity := JsonGetChar(Tc, 'parity', 'N');
+        Buses[OutCount].StopBits := JsonGetInt(Tc, 'stopBits', 1);
+        FillChar(Buses[OutCount].Rs485, SizeOf(Buses[OutCount].Rs485), 0);
+        Rs485Obj := ObjGetObjectCI(Tc, 'rs485');
+      end
+      else
+      begin
+        Buses[OutCount].Port := JsonGetString(Row, 'port', '');
+        Buses[OutCount].Baud := JsonGetInt(Row, 'baud', 9600);
+        Buses[OutCount].DataBits := JsonGetInt(Row, 'dataBits', 8);
+        Buses[OutCount].Parity := JsonGetChar(Row, 'parity', 'N');
+        Buses[OutCount].StopBits := JsonGetInt(Row, 'stopBits', 1);
+        FillChar(Buses[OutCount].Rs485, SizeOf(Buses[OutCount].Rs485), 0);
+        Rs485Obj := ObjGetObjectCI(Row, 'rs485');
+      end;
+      if Rs485Obj <> nil then
+      begin
+        Buses[OutCount].Rs485.Enabled := JsonGetBool(Rs485Obj, 'enabled', False);
+        Buses[OutCount].Rs485.RtsOnSend := JsonGetBool(Rs485Obj, 'rtsOnSend', True);
+        Buses[OutCount].Rs485.RtsAfterSend := JsonGetBool(Rs485Obj, 'rtsAfterSend', False);
+        Buses[OutCount].Rs485.DelayRtsBeforeSend := Cardinal(Max(0, JsonGetInt(Rs485Obj, 'delayRtsBeforeSend', 0)));
+        Buses[OutCount].Rs485.DelayRtsAfterSend := Cardinal(Max(0, JsonGetInt(Rs485Obj, 'delayRtsAfterSend', 0)));
+      end;
+      if Buses[OutCount].Port = '' then
+        raise Exception.Create('hambridge.yaml: bus "' + Name + '" needs transport_configuration.port (or legacy port)');
+      Inc(OutCount);
     end;
-    if Rs485Obj <> nil then
-    begin
-      Buses[I].Rs485.Enabled := JsonGetBool(Rs485Obj, 'enabled', False);
-      Buses[I].Rs485.RtsOnSend := JsonGetBool(Rs485Obj, 'rtsOnSend', True);
-      Buses[I].Rs485.RtsAfterSend := JsonGetBool(Rs485Obj, 'rtsAfterSend', False);
-      Buses[I].Rs485.DelayRtsBeforeSend := Cardinal(Max(0, JsonGetInt(Rs485Obj, 'delayRtsBeforeSend', 0)));
-      Buses[I].Rs485.DelayRtsAfterSend := Cardinal(Max(0, JsonGetInt(Rs485Obj, 'delayRtsAfterSend', 0)));
-    end;
-    if Buses[I].Port = '' then
-      raise Exception.Create('hambridge.yaml: bus "' + Name + '" needs transport_configuration.port (or legacy port)');
+  end;
+  SetLength(Buses, OutCount);
+end;
+
+procedure LoadBusMeta(Root: TJSONObject; var Meta: TBusMetaDyn);
+var
+  BObj: TJSONObject;
+  I: Integer;
+  Name: string;
+  Row: TJSONObject;
+begin
+  SetLength(Meta, 0);
+  BObj := ObjGetObjectCI(Root, 'buses');
+  if BObj = nil then
+    Exit;
+  SetLength(Meta, BObj.Count);
+  for I := 0 to BObj.Count - 1 do
+  begin
+    Name := BObj.Names[I];
+    if not (BObj.Items[I] is TJSONObject) then
+      raise Exception.Create('hambridge.yaml: buses.' + Name + ' must be an object');
+    Row := TJSONObject(BObj.Items[I]);
+    Meta[I].Id := Name;
+    Meta[I].Transport := LowerCase(Trim(JsonGetString(Row, 'transport', '')));
+    Meta[I].Protocol := LowerCase(Trim(JsonGetString(Row, 'protocol', '')));
+    Meta[I].ProtocolConfig := nil;
+    if ObjFindCI(Row, 'protocol_config') is TJSONObject then
+      Meta[I].ProtocolConfig := TJSONObject(ObjFindCI(Row, 'protocol_config'));
   end;
 end;
 
-procedure LoadViscaDevices(Root: TJSONObject; var Devs: TViscaDeviceDyn);
+function FindBusMetaIndex(const Meta: TBusMetaDyn; const BusId: string): Integer;
+var
+  I: Integer;
+begin
+  for I := 0 to High(Meta) do
+    if SameText(Meta[I].Id, BusId) then
+      Exit(I);
+  Result := -1;
+end;
+
+function BusMetaBool(const M: TBusMeta; const Key: string; Default: Boolean): Boolean;
+begin
+  if M.ProtocolConfig = nil then
+    Exit(Default);
+  Result := JsonGetBool(M.ProtocolConfig, Key, Default);
+end;
+
+procedure LoadEndpoints(Root: TJSONObject; const Meta: TBusMetaDyn; out Devs: TViscaDeviceDyn; out Inputs: TEvdevInputDyn;
+  out EvdevEnabled: Boolean);
 var
   Arr, CoalArr: TJSONArray;
   I, J: Integer;
-  Item: TJSONObject;
-  Sch: TJSONObject;
-  addr: Integer;
+  Item, MatchObj, Sch: TJSONObject;
+  Slug, EndpointType, Protocol, BusId, Model: string;
+  BusIx: Integer;
+  DeviceID: Integer;
+  Inp: TEvdevInputConfig;
 begin
   SetLength(Devs, 0);
-  if not (ObjFindCI(Root, 'devices') is TJSONArray) then
+  SetLength(Inputs, 0);
+  EvdevEnabled := False;
+  if not (ObjFindCI(Root, 'endpoints') is TJSONArray) then
     Exit;
-  Arr := TJSONArray(ObjFindCI(Root, 'devices'));
-  SetLength(Devs, Arr.Count);
+  Arr := TJSONArray(ObjFindCI(Root, 'endpoints'));
   for I := 0 to Arr.Count - 1 do
   begin
     if not (Arr.Items[I] is TJSONObject) then
-      raise Exception.Create('hambridge.yaml: devices[' + IntToStr(I) + '] must be an object');
+      raise Exception.Create('hambridge.yaml: endpoints[' + IntToStr(I) + '] must be an object');
     Item := TJSONObject(Arr.Items[I]);
-    Devs[I].Slug := JsonGetRequiredSlug(Item, 'VISCA device[' + IntToStr(I) + ']');
-    Devs[I].Model := JsonGetString(Item, 'model', '');
-    Devs[I].BusId := JsonGetString(Item, 'bus', '');
-    addr := JsonGetInt(Item, 'viscaAddress', -1);
-    if (addr < 1) or (addr > 7) then
-      raise Exception.Create('hambridge.yaml: VISCA device slug "' + Devs[I].Slug + '" needs integer viscaAddress in 1..7');
-    Devs[I].ViscaAddress := Byte(addr);
-    Devs[I].MinInterCommandMs := 40;
-    Devs[I].MaxQueueDepth := 50;
-    Devs[I].AckTimeoutMs := 800;
-    Devs[I].CommandRetryMax := 2;
-    Devs[I].RetryBackoffMs := 50;
-    Sch := ObjGetObjectCI(Item, 'scheduler');
-    SetLength(Devs[I].CoalescePaths, 0);
-    if Sch <> nil then
+    Slug := JsonGetRequiredSlug(Item, 'endpoint[' + IntToStr(I) + ']');
+    if not (ObjFindCI(Item, 'match') is TJSONObject) then
+      raise Exception.Create('hambridge.yaml: endpoint "' + Slug + '" needs match object');
+    MatchObj := TJSONObject(ObjFindCI(Item, 'match'));
+    EndpointType := LowerCase(Trim(JsonGetString(MatchObj, 'endpoint_type', '')));
+    BusId := Trim(JsonGetString(MatchObj, 'bus', ''));
+    if EndpointType = '' then
+      raise Exception.Create('hambridge.yaml: endpoint "' + Slug + '" needs match.endpoint_type');
+    if BusId = '' then
+      raise Exception.Create('hambridge.yaml: endpoint "' + Slug + '" needs match.bus');
+    BusIx := FindBusMetaIndex(Meta, BusId);
+    if BusIx < 0 then
+      raise Exception.Create('hambridge.yaml: endpoint "' + Slug + '" references unknown bus "' + BusId + '"');
+
+    if EndpointType = 'device' then
     begin
-      Devs[I].MinInterCommandMs := Cardinal(Max(1, JsonGetInt(Sch, 'minInterCommandMs', 40)));
-      Devs[I].MaxQueueDepth := Cardinal(Max(1, JsonGetInt(Sch, 'maxQueueDepth', 50)));
-      Devs[I].AckTimeoutMs := Cardinal(Max(0, JsonGetInt(Sch, 'ackTimeoutMs', 800)));
-      Devs[I].CommandRetryMax := Cardinal(Max(0, JsonGetInt(Sch, 'commandRetryMax', 2)));
-      Devs[I].RetryBackoffMs := Cardinal(Max(0, JsonGetInt(Sch, 'retryBackoffMs', 50)));
-      if ObjFindCI(Sch, 'coalesce') is TJSONArray then
+      if not SameText(Meta[BusIx].Protocol, 'visca') then
+        raise Exception.Create('hambridge.yaml: endpoint "' + Slug + '" endpoint_type device requires a visca bus');
+      DeviceID := JsonGetInt(MatchObj, 'deviceID', -1);
+      if (DeviceID < 1) or (DeviceID > 7) then
+        raise Exception.Create('hambridge.yaml: device endpoint "' + Slug + '" needs integer match.deviceID in 1..7');
+      Model := Trim(JsonGetString(Item, 'model', ''));
+      if Model = '' then
+        raise Exception.Create('hambridge.yaml: device endpoint "' + Slug + '" needs model');
+
+      SetLength(Devs, Length(Devs) + 1);
+      Devs[High(Devs)].Slug := Slug;
+      Devs[High(Devs)].Model := Model;
+      Devs[High(Devs)].BusId := BusId;
+      Devs[High(Devs)].ViscaAddress := Byte(DeviceID);
+      Devs[High(Devs)].MinInterCommandMs := 40;
+      Devs[High(Devs)].MaxQueueDepth := 50;
+      Devs[High(Devs)].AckTimeoutMs := 800;
+      Devs[High(Devs)].CommandRetryMax := 2;
+      Devs[High(Devs)].RetryBackoffMs := 50;
+      SetLength(Devs[High(Devs)].CoalescePaths, 0);
+      Sch := ObjGetObjectCI(Item, 'scheduler');
+      if Sch <> nil then
       begin
-        CoalArr := TJSONArray(ObjFindCI(Sch, 'coalesce'));
-        SetLength(Devs[I].CoalescePaths, CoalArr.Count);
-        for J := 0 to CoalArr.Count - 1 do
+        Devs[High(Devs)].MinInterCommandMs := Cardinal(Max(1, JsonGetInt(Sch, 'minInterCommandMs', 40)));
+        Devs[High(Devs)].MaxQueueDepth := Cardinal(Max(1, JsonGetInt(Sch, 'maxQueueDepth', 50)));
+        Devs[High(Devs)].AckTimeoutMs := Cardinal(Max(0, JsonGetInt(Sch, 'ackTimeoutMs', 800)));
+        Devs[High(Devs)].CommandRetryMax := Cardinal(Max(0, JsonGetInt(Sch, 'commandRetryMax', 2)));
+        Devs[High(Devs)].RetryBackoffMs := Cardinal(Max(0, JsonGetInt(Sch, 'retryBackoffMs', 50)));
+        if ObjFindCI(Sch, 'coalesce') is TJSONArray then
         begin
-          Devs[I].CoalescePaths[J] := '';
-          if CoalArr.Items[J] is TJSONString then
-            Devs[I].CoalescePaths[J] := Trim(TJSONString(CoalArr.Items[J]).AsString);
+          CoalArr := TJSONArray(ObjFindCI(Sch, 'coalesce'));
+          SetLength(Devs[High(Devs)].CoalescePaths, CoalArr.Count);
+          for J := 0 to CoalArr.Count - 1 do
+          begin
+            Devs[High(Devs)].CoalescePaths[J] := '';
+            if CoalArr.Items[J] is TJSONString then
+              Devs[High(Devs)].CoalescePaths[J] := Trim(TJSONString(CoalArr.Items[J]).AsString);
+          end;
         end;
       end;
-    end;
-    if Devs[I].Model = '' then
-      raise Exception.Create('hambridge.yaml: VISCA device slug "' + Devs[I].Slug + '" needs model');
-    if Devs[I].BusId = '' then
-      raise Exception.Create('hambridge.yaml: VISCA device slug "' + Devs[I].Slug + '" needs bus');
+    end
+    else if EndpointType = 'controller' then
+    begin
+      Protocol := LowerCase(Trim(JsonGetString(MatchObj, 'protocol', '')));
+      if Protocol = '' then
+        raise Exception.Create('hambridge.yaml: controller endpoint "' + Slug + '" needs match.protocol');
+      if Protocol = 'evdev' then
+      begin
+        if not SameText(Meta[BusIx].Protocol, 'evdev') then
+          raise Exception.Create('hambridge.yaml: controller endpoint "' + Slug + '" protocol evdev requires an evdev bus');
+        if not BusMetaBool(Meta[BusIx], 'enabled', True) then
+          raise Exception.Create('hambridge.yaml: controller endpoint "' + Slug + '" references evdev bus "' + BusId + '" but protocol_config.enabled is false');
+        FillChar(Inp, SizeOf(Inp), 0);
+        Inp.Slug := Slug;
+        Inp.DeviceNode := Trim(JsonGetString(MatchObj, 'deviceNode', ''));
+        Inp.GrabExclusive := JsonGetBool(Item, 'grabExclusive', False);
+        Inp.MqttTopic := Trim(JsonGetString(Item, 'mqttTopic', ''));
+        if Inp.DeviceNode = '' then
+          raise Exception.Create('hambridge.yaml: controller endpoint "' + Slug + '" needs match.deviceNode');
+        if Inp.MqttTopic = '' then
+          Inp.MqttTopic := 'controller/' + Slug + '/event';
+        SetLength(Inputs, Length(Inputs) + 1);
+        Inputs[High(Inputs)] := Inp;
+        EvdevEnabled := True;
+      end
+      else if Protocol = 'visca' then
+        raise Exception.Create('hambridge.yaml: controller endpoint "' + Slug + '" protocol visca not implemented yet')
+      else
+        raise Exception.Create('hambridge.yaml: controller endpoint "' + Slug + '" has unknown match.protocol "' + Protocol + '"');
+    end
+    else
+      raise Exception.Create('hambridge.yaml: endpoint "' + Slug + '" has unknown match.endpoint_type "' + EndpointType + '"');
   end;
 end;
 
 function LoadDevicesConfig(const Path: string): TDevicesConfig;
 var
   Data: TJSONData;
-  Root, Ev, Dm: TJSONObject;
-  Arr: TJSONArray;
-  I: Integer;
-  Item: TJSONObject;
+  Root, Dm: TJSONObject;
+  TmpInputs: TEvdevInputDyn;
 begin
   FillChar(Result, SizeOf(Result), 0);
   Data := YamlFileToJsonData(Path);
@@ -316,7 +423,8 @@ begin
   Root := TJSONObject(Data);
   try
     LoadBuses(Root, Result.Buses);
-    LoadViscaDevices(Root, Result.ViscaDevices);
+    LoadBusMeta(Root, Result.BusMeta);
+
     Result.ViscaMappingPath := '';
     Dm := ObjGetObjectCI(Root, 'device_mappings');
     if Dm <> nil then
@@ -325,35 +433,8 @@ begin
       Result.ViscaMappingPath := JsonGetString(Root, 'viscaMapping', '');
     if Result.ViscaMappingPath = '' then
       Result.ViscaMappingPath := JsonGetString(Root, 'visca_mapping', '');
-
-    Ev := ObjGetObjectCI(Root, 'evdev');
-    if Ev = nil then
-    begin
-      Result.EvdevEnabled := False;
-      SetLength(Result.EvdevInputs, 0);
-    end
-    else
-    begin
-      Result.EvdevEnabled := JsonGetBool(Ev, 'enabled', False);
-      if not (ObjFindCI(Ev, 'inputs') is TJSONArray) then
-        raise Exception.Create('hambridge.yaml: evdev.inputs must be an array');
-      Arr := TJSONArray(ObjFindCI(Ev, 'inputs'));
-      SetLength(Result.EvdevInputs, Arr.Count);
-      for I := 0 to Arr.Count - 1 do
-      begin
-        if not (Arr.Items[I] is TJSONObject) then
-          raise Exception.Create('hambridge.yaml: evdev.inputs[' + IntToStr(I) + '] must be an object');
-        Item := TJSONObject(Arr.Items[I]);
-        Result.EvdevInputs[I].Slug := JsonGetRequiredSlug(Item, 'evdev.inputs[' + IntToStr(I) + ']');
-        Result.EvdevInputs[I].DeviceNode := JsonGetString(Item, 'deviceNode', '');
-        Result.EvdevInputs[I].GrabExclusive := JsonGetBool(Item, 'grabExclusive', False);
-        Result.EvdevInputs[I].MqttTopic := JsonGetString(Item, 'mqttTopic', '');
-        if Result.EvdevInputs[I].DeviceNode = '' then
-          raise Exception.Create('hambridge.yaml: evdev input "' + Result.EvdevInputs[I].Slug + '" needs deviceNode');
-        if Trim(Result.EvdevInputs[I].MqttTopic) = '' then
-          Result.EvdevInputs[I].MqttTopic := 'evdev/' + Result.EvdevInputs[I].Slug + '/event';
-      end;
-    end;
+    LoadEndpoints(Root, Result.BusMeta, Result.ViscaDevices, TmpInputs, Result.EvdevEnabled);
+    Result.EvdevInputs := TmpInputs;
   finally
     Root.Free;
   end;
@@ -362,25 +443,9 @@ end;
 procedure ValidateDevicesConfig(const D: TDevicesConfig);
 var
   I, J: Integer;
-  BusFound: Boolean;
 begin
-  if D.EvdevEnabled and (Length(D.EvdevInputs) = 0) then
-    raise Exception.Create('hambridge.yaml: evdev.enabled is true but evdev.inputs is empty');
   if (Length(D.ViscaDevices) > 0) and (Length(D.Buses) = 0) then
     raise Exception.Create('hambridge.yaml: VISCA devices require at least one bus in "buses"');
-  for I := 0 to High(D.ViscaDevices) do
-  begin
-    BusFound := False;
-    for J := 0 to High(D.Buses) do
-      if SameText(D.Buses[J].Id, D.ViscaDevices[I].BusId) then
-      begin
-        BusFound := True;
-        Break;
-      end;
-    if not BusFound then
-      raise Exception.Create('hambridge.yaml: VISCA device slug "' + D.ViscaDevices[I].Slug +
-        '" references unknown bus "' + D.ViscaDevices[I].BusId + '"');
-  end;
   for I := 0 to High(D.ViscaDevices) do
     for J := I + 1 to High(D.ViscaDevices) do
       if SameText(D.ViscaDevices[I].Slug, D.ViscaDevices[J].Slug) then

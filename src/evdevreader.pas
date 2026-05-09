@@ -20,7 +20,7 @@ type
   { One configured input device: holds libevdev context, handles open/reopen with backoff. }
   TEvdevInput = class
   private
-    FCfg: TEvdevInputConfig;  { Copy of hambridge.yaml evdev.inputs[] row for this input }
+    FCfg: TEvdevInputConfig;  { Copy of hambridge.yaml endpoints[] controller/evdev row for this input }
     FDev: Plibevdev;          { Opaque libevdev handle; nil when closed }
     FFd: cint;                { Non-blocking O_RDONLY fd for poll; -1 when closed }
     FBackoffMs: Cardinal;     { Current reopen delay; doubles on failure up to cap }
@@ -173,6 +173,7 @@ begin
   o := TJSONObject.Create;
   try
     o.Add('ts', Int64(DateTimeToUnix(Now, True)) * 1000);
+    o.Add('slug', FCfg.Slug);
     o.Add('inputSlug', FCfg.Slug);
     o.Add('deviceNode', FCfg.DeviceNode);
     o.Add('source', 'evdev');
