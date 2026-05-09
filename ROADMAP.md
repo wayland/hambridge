@@ -94,20 +94,19 @@ This file lists **planned or deferred work** compared to [`docs/developers/Speci
 - [ ] **Per-device UDP endpoints** — allow selecting UDP host/port per device in **`hambridge.yaml`** alongside serial buses.
 - [ ] **Telemetry/status parity** — keep `device/<slug>/telemetry`, `device/<slug>/status`, and `device/<slug>/commandAck` semantics consistent across serial vs UDP transports.
 
-### VISCA over UDP — Open Questions
+### VISCA over UDP — Decisions (documented in `Specification.md` §3.4)
 
-**Addresses (UDP)**
+**Addresses + sockets (UDP)**
 
-- [ ] **Single socket vs per-device ports** — Must every device share the bound `bindPort`, or do we support per-device listener ports?
-- [ ] **Reply routing** — When multiple devices share one UDP socket, how do replies map to the correct `device/<slug>` (VISCA address byte only, or IP+port correlation, or dedicated sockets)?
-- [ ] **NAT / asymmetric paths** — How do we behave when outbound and return paths differ (e.g. NAT, Docker bridge networks)?
+- [x] **Single socket vs per-device ports** — both are supported: endpoint-level `udpHost`/`udpPort` overrides bus defaults; multiple UDP buses allowed (distinct `bindHost`/`bindPort`).
+- [x] **Reply routing** — per extracted frame, attribute by `(match.bus, remoteHost, remotePort, deviceID)` with strict must-match against the endpoint’s resolved `udpHost`/`udpPort`.
+- [x] **NAT / asymmetric paths** — strict **must-match**; non-matching return traffic is not correlated (future relaxation would be a spec change).
 
 **Device control over UDP**
 
-- [ ] **ACK / completion over lossy UDP** — Same `ackTimeoutMs` / retry semantics as serial, or UDP-specific defaults (e.g. shorter timeouts, different retry cap)?
-- [ ] **Datagram boundaries vs command boundaries** — Confirm one VISCA frame per sent datagram always; any exception for large payloads?
-- [ ] **Half-duplex / collision** — Is there any scenario where the bridge must not send while expecting a reply on the same socket (shared medium semantics)?
-- [ ] **MTU / fragmentation** — Do we forbid IP fragmentation (stay under PMTU), or detect and log?
+- [x] **ACK / completion / retry** — use the same per-endpoint `scheduler` fields as serial (`ackTimeoutMs`, `commandRetryMax`, `retryBackoffMs`, …).
+- [x] **Datagram boundaries vs frames** — conservative send: one VISCA frame per datagram; liberal receive: accept one-or-more frames per datagram (no cross-datagram reassembly by default).
+- [x] **MTU / fragmentation** — keep outbound frames within a reasonable upper bound (spec suggests ≤ 1024 bytes); drop/handle oversized datagrams safely on receive.
 
 ## v0.5.0 — Test Suite
 
