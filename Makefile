@@ -35,13 +35,17 @@ RPM_VER := 0.5.2
 FPC_VER := $(shell fpc -iV 2>/dev/null)
 FPC_OS := $(shell fpc -iTO 2>/dev/null)
 FPC_CPU := $(shell fpc -iTP 2>/dev/null)
-FPCUNIT_DIR := $(firstword $(wildcard /usr/lib64/fpc/$(FPC_VER)/units/$(FPC_CPU)-$(FPC_OS)/fcl-fpcunit) \
-  $(wildcard /usr/lib/fpc/$(FPC_VER)/units/$(FPC_CPU)-$(FPC_OS)/fcl-fpcunit))
+FPCUNIT_DIR := $(firstword \
+  $(wildcard /usr/lib64/fpc/$(FPC_VER)/units/$(FPC_CPU)-$(FPC_OS)/fcl-fpcunit) \
+  $(wildcard /usr/lib/fpc/$(FPC_VER)/units/$(FPC_CPU)-$(FPC_OS)/fcl-fpcunit) \
+  $(wildcard /usr/lib/x86_64-linux-gnu/fpc/$(FPC_VER)/units/x86_64-linux/fcl-fpcunit) \
+  $(wildcard /usr/lib/aarch64-linux-gnu/fpc/$(FPC_VER)/units/aarch64-linux/fcl-fpcunit) \
+  $(wildcard /usr/lib/arm-linux-gnueabihf/fpc/$(FPC_VER)/units/arm-linux/fcl-fpcunit))
 TESTSRC := tests/hambridge_tests.lpr tests/fixturepaths.pas tests/test_devicesconfig.pas tests/test_viscamapping.pas tests/test_bridgeconfig.pas
 TESTBIN := $(OUTDIR)/hambridge_tests
-TESTFLAGS := -MObjFPC -Scghi -O2 -gl -Futests -Fusrc -Fu$(MQTTDIR) -Fu$(FPCUNIT_DIR) -FU$(OUTDIR)
-ifeq ($(FPCUNIT_DIR),)
-$(error fcl-fpcunit not found (FPC $(FPC_VER), $(FPC_CPU)-$(FPC_OS)) — install the full fpc / fpc-src package that provides FPCUnit)
+TESTFLAGS := -MObjFPC -Scghi -O2 -gl -Futests -Fusrc -Fu$(MQTTDIR) -FU$(OUTDIR)
+ifdef FPCUNIT_DIR
+TESTFLAGS += -Fu$(FPCUNIT_DIR)
 endif
 RPM_TOPDIR := $(abspath build/rpmbuild)
 RPM_SPEC := packaging/Redhat/hambridge.spec
@@ -80,6 +84,9 @@ $(BINARY): $(OUTDIR) $(MQTTDIR)/mqtt.pas $(SRCDIR)/hambridge.lpr $(wildcard $(SR
 	$(FPC) $(FPCFLAGS) -o$(BINARY) $(SRCDIR)/hambridge.lpr
 
 $(TESTBIN): $(OUTDIR) $(MQTTDIR)/mqtt.pas $(TESTSRC) $(wildcard $(SRCDIR)/*.pas)
+ifeq ($(FPCUNIT_DIR),)
+	$(error fcl-fpcunit not found (FPC $(FPC_VER), $(FPC_CPU)-$(FPC_OS)) — install fp-units-fcl / fpc-units (e.g. apt: fp-units-fcl; dnf: fpc))
+endif
 	$(FPC) $(TESTFLAGS) -o$(TESTBIN) tests/hambridge_tests.lpr
 
 test: $(TESTBIN)

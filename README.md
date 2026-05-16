@@ -12,8 +12,8 @@ The shipped binary is **`hambridge`**; systemd and packaging use the **HaMBridge
 | Input | Output | MQTT Topic | Description |
 |-------|--------|------------|-------------|
 | Linux evdev | MQTT JSON | `controller/<slug>/event` (pub)* | Publish kernel input events as JSON (`/dev/input/event*`, **`endpoints`** with **`match.protocol: evdev`**) |
-| Serial VISCA | MQTT JSON | `controller/<bus-slug>/event` (pub), `controller/<bus-slug>/status` (pub), `device/<slug>/telemetry` (pub), `device/<slug>/status` (pub), `device/<slug>/commandAck` (pub) | Decode controller traffic and device replies and publish JSON for subscribers. |
-| MQTT JSON | VISCA over serial (RS-232 / RS-485) | `device/<slug>/<command>` (sub) (bridge subscribes to `device/#`) | Encode JSON payloads using the file in **`device_mappings.visca`** (path relative to **`hambridge.yaml`**; repo templates use **`config/mappings/visca.yaml`** when you **`--config ./config/hambridge.yaml`**) and transmit on the device’s bus. |
+| VISCA (serial or UDP) | MQTT JSON | `controller/<bus-slug>/event` (pub), `controller/<bus-slug>/status` (pub), `device/<slug>/telemetry` (pub), `device/<slug>/status` (pub), `device/<slug>/commandAck` (pub) | Decode controller traffic and device replies from RS-232 / RS-485 or UDP datagrams and publish JSON for subscribers. |
+| MQTT JSON | VISCA (serial RS-232 / RS-485 or UDP/IP) | `device/<slug>/<command>` (sub) (bridge subscribes to `device/#`) | Encode JSON payloads using **`device_mappings.visca`** (e.g. **`config/mappings/visca.yaml`** next to **`hambridge.yaml`**) and send on the device’s bus (**`transport: serial`** or **`transport: udp`** with per-endpoint **`udpHost`** / **`udpPort`**). |
 
 * = Configurable
 
