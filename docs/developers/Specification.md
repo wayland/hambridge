@@ -42,9 +42,9 @@ At a high level, HaMBridge supports:
 - **MQTT → VISCA**: subscribe to `device/<slug>/<command>` and send VISCA over serial
 - **VISCA → MQTT**: decode controller traffic (`controller/<slug>/...`) and device replies (`device/<slug>/...`)
 
-Automated verification (FPCUnit, **`make test`**, fixtures — §10) 
-(technical detail §10.6). **Contributor PR and release *process*** (checklists) lives in **`WORKFLOWS.md`**
-at the repository root.
+Automated verification (FPCUnit, **`make test`**, fixtures — §10) and CI/release automation (§10.6) are
+specified here. **Contributor PR and release *process*** (checklists) lives in **`WORKFLOWS.md`** at
+the repository root.
 
 ---
 
@@ -1142,6 +1142,9 @@ not committed; **`hambridge.lpr`** in `src/` is the program entry source.
 ```
 /Makefile                      # also downloads prof7bit/fpc-mqtt-client (pinned zip + SHA256) into build/deps/
 /patches/                     # build-time patches (e.g. fpc-mqtt-client TLS verify-before-connect); see patches/README.md
+/release-pins.json            # CI/release pin contract (§10.6.6); checked by scripts/ci/verify-release-pins.sh
+/.github/workflows/           # ci.yml (PR), release.yml (tag)
+/scripts/ci/                  # verify-release-tag.sh, verify-release-pins.sh, …
 /README.md
 /docs/user/INSTALL.md
 /docs/developers/DEVELOPING.md
@@ -1310,8 +1313,8 @@ This section defines **how** HaMBridge is tested in-tree. It is **normative for 
   adapters, or `/dev/input` nodes in the default path.
 * **CI policy:** Automated tests **must pass before a PR is merged** (e.g. required status checks /
   merge queue). **Opening a PR** does not by itself define success—**merge-ready checks** do.
-  **GitHub Actions** and branch-protection details are **v0.5.2**; until then, **`make test`** is the
-  required **local** gate for contributors.
+  **GitHub Actions** (`.github/workflows/ci.yml`) should enforce this on protected branches;
+  **`make test`** remains the required **local** gate for contributors.
 * **No hardware-in-the-loop (HIL) in CI:** default automated runs **must not** require physical
   VISCA devices, real RS-485 wiring, or a specific evdev node. Optional **manual** or **lab**
   workflows may exist outside this normative path.
@@ -1372,9 +1375,9 @@ For integration tests that exercise **`mqttpublisher`** or end-to-end subscribe/
   **Mosquitto in a container**, **mock client** that records publishes, or **no broker** if the test
   stays below the MQTT layer.
 * The specification **does not** mandate a particular broker product; choose **whatever fits**
-  the test harness and CI environment (v0.5.2).
+  the test harness and CI environment.
 
-## 10.6 CI and release builds (v0.5.2, planning)
+## 10.6 CI and release builds
 
 This subsection is the **normative description of the automated build and release pipeline** (GitHub
 Actions): runner classes, Docker usage, ARM behaviour, job ordering, and artifacts. **Human-facing

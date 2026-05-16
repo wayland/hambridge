@@ -41,7 +41,10 @@ make            # builds ./build/hambridge
 make test       # FPCUnit: builds ./build/hambridge_tests and runs all tests (needs fcl-fpcunit from your FPC install)
 make clean      # removes ./build/
 make run        # seeds config/*.yaml from *.example if missing; runs with explicit --config ./config/hambridge.yaml
+make verify-release-pins   # assert release-pins.json matches Makefile / RPM spec MQTT pin
 ```
+
+Pull requests run **`make`** and **`make test`** via **`.github/workflows/ci.yml`** (see **`WORKFLOWS.md`**).
 
 **Fedora RPM (optional)** — on a Fedora/RHEL-family host with `rpm-build`, `git`, and the same
 build deps as `make`:

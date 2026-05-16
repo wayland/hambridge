@@ -10,7 +10,8 @@ Build-Depends: debhelper-compat (= 13),
  libevdev-dev,
  make,
  unzip,
- curl
+ curl,
+ patch
 Standards-Version: 4.6.2
 Maintainer: Tim Nelson <wayland@wayland.id.au>
 # Binary Architecture must match the machine that runs dpkg-buildpackage (arm64 Pi OS 64-bit,

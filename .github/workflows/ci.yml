@@ -1,0 +1,37 @@
+# PR / main CI — Specification.md §10.6.4
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    name: build-and-test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            fpc fp-units-fcl fp-units-rtl libevdev-dev \
+            make unzip curl patch jq
+
+      - name: make && make test
+        run: |
+          make clean
+          make
+          make test
+
+  verify-pins:
+    name: verify-release-pins
+    runs-on: ubuntu-24.04
+    needs: build-and-test
+    steps:
+      - uses: actions/checkout@v4
+      - name: MQTT pin drift check
+        run: ./scripts/ci/verify-release-pins.sh

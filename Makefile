@@ -29,7 +29,7 @@ FPCFLAGS += -k-L$(EVDEV_LDIR) -k-l:libevdev.so.2
 FPCFLAGS += -Fl/usr/lib64 -Fl/usr/lib/x86_64-linux-gnu -Fl/usr/lib/aarch64-linux-gnu -Fl/usr/lib/arm-linux-gnueabihf
 
 # Keep in sync with src/hambridge.lpr AppVersion and packaging/Redhat/hambridge.spec Version.
-RPM_VER := 0.5.1
+RPM_VER := 0.5.2
 
 # FPCUnit (fcl-fpcunit) for `make test` — path varies by distro / multiarch.
 FPC_VER := $(shell fpc -iV 2>/dev/null)
@@ -46,7 +46,11 @@ endif
 RPM_TOPDIR := $(abspath build/rpmbuild)
 RPM_SPEC := packaging/Redhat/hambridge.spec
 
-.PHONY: all clean run test fedora-rpm-sources fedora-rpm fedora-test raspbian-help debian-deb
+DISTDIR := dist
+RELEASE_TAR := $(DISTDIR)/hambridge-$(RPM_VER)-linux-x86_64.tar.gz
+
+.PHONY: all clean run test release-tarball release-checksums verify-release-pins verify-release-tag \
+	fedora-rpm-sources fedora-rpm fedora-test raspbian-help debian-deb
 
 all: $(BINARY)
 
@@ -83,6 +87,27 @@ test: $(TESTBIN)
 
 clean:
 	rm -rf $(OUTDIR)
+
+# Release tarball for GitHub Actions (§10.6.5).
+release-tarball: $(BINARY)
+	@mkdir -p '$(DISTDIR)'
+	@tmpdir=$$(mktemp -d); \
+	trap 'rm -rf "$$tmpdir"' EXIT; \
+	staging="$$tmpdir/hambridge-$(RPM_VER)"; \
+	mkdir -p "$$staging/config/mappings"; \
+	cp '$(BINARY)' LICENSE README.md "$$staging/"; \
+	cp config/hambridge.yaml.example "$$staging/config/"; \
+	cp config/mappings/visca.yaml.example "$$staging/config/mappings/"; \
+	tar -C "$$tmpdir" -czf '$(RELEASE_TAR)' "hambridge-$(RPM_VER)"
+
+release-checksums: release-tarball
+	@cd '$(DISTDIR)' && sha256sum "$$(basename '$(RELEASE_TAR)')" > SHA256SUMS
+
+verify-release-pins:
+	@./scripts/ci/verify-release-pins.sh
+
+verify-release-tag:
+	@./scripts/ci/verify-release-tag.sh
 
 run: $(BINARY)
 	@mkdir -p config/mappings

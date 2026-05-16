@@ -134,7 +134,14 @@ per **`Specification.md` §3.4.
 
 ## v0.5.2 — GitHub Actions
 
-Set up GitHub Actions that will do a release.  A release should consist of packages for a) Redhat and b) Raspbian
+**Shipped:** `.github/workflows/ci.yml` and `.github/workflows/release.yml`; `release-pins.json`; `scripts/ci/` helpers. See **`WORKFLOWS.md`** and **`docs/developers/Specification.md`** §10.6.
+
+### GitHub Actions Checklist
+
+- [x] **PR CI** — `build-and-test` (`make`, `make test`) on `ubuntu-24.04`; `verify-release-pins` after.
+- [x] **Release on tag** — `verify-tag` vs `AppVersion` / `RPM_VER` / spec / debian changelog.
+- [x] **Artifacts** — `hambridge-{ver}-linux-x86_64.tar.gz`, `SHA256SUMS`, `.deb` (amd64 + arm64), Fedora `.rpm`.
+- [x] **GitHub Release** — attach assets; body from `CHANGELOG.md` section.
 
 ## v1.0.0 — Release!
 

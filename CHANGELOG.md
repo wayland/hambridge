@@ -2,6 +2,12 @@
 
 Notable changes to **HaMBridge** (this repository). Release history for packaging metadata remains in `packaging/debian/changelog` (Debian) and the RPM spec where required by those formats.
 
+## [0.5.2] — 2026-05-16
+
+### Added
+
+- **GitHub Actions** — `.github/workflows/ci.yml` runs `make` and `make test` on pull requests and `main`; `verify-release-pins` checks `release-pins.json` against the Makefile and RPM spec. `.github/workflows/release.yml` on tags `v*.*.*` verifies version alignment, builds `hambridge-{version}-linux-x86_64.tar.gz` + `SHA256SUMS`, Debian `.deb` (amd64 and arm64 runners), and Fedora RPM (`fedora:42` container), then publishes a GitHub Release with `CHANGELOG.md` notes.
+
 ## [0.5.1] — 2026-05-16
 
 ### Added

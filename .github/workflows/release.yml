@@ -1,0 +1,173 @@
+# Tag release — Specification.md §10.6.5 (Red Hat RPM + Debian/Raspbian-class .deb)
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  verify-tag:
+    name: verify-tag
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify tag matches packaged versions
+        run: ./scripts/ci/verify-release-tag.sh
+
+  build-artifacts:
+    name: build-artifacts
+    runs-on: ubuntu-24.04
+    needs: [verify-tag]
+    if: >
+      always() &&
+      (needs.verify-tag.result == 'success' || needs.verify-tag.result == 'skipped')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build and Debian packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            fpc fp-units-fcl fp-units-rtl libevdev-dev \
+            make unzip curl patch jq \
+            build-essential debhelper fakeroot dpkg-dev
+
+      - name: Build, test, tarball, amd64 .deb
+        run: |
+          make clean
+          make
+          make test
+          make release-tarball release-checksums
+          make debian-deb
+
+      - name: Collect release files (amd64)
+        run: |
+          mkdir -p dist/upload
+          cp dist/hambridge-*-linux-x86_64.tar.gz dist/SHA256SUMS dist/upload/
+          deb="$(ls -1 ../*.deb 2>/dev/null | head -1)"
+          if [ -z "$deb" ]; then
+            echo 'no .deb in parent directory' >&2
+            exit 1
+          fi
+          cp "$deb" dist/upload/
+          ls -la dist/upload/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-amd64
+          path: dist/upload/
+
+  build-deb-arm64:
+    name: build-deb-arm64
+    runs-on: ubuntu-24.04-arm
+    needs: [verify-tag]
+    if: >
+      always() &&
+      (needs.verify-tag.result == 'success' || needs.verify-tag.result == 'skipped')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build and Debian packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            fpc fp-units-fcl fp-units-rtl libevdev-dev \
+            make unzip curl patch \
+            build-essential debhelper fakeroot dpkg-dev
+
+      - name: Build and arm64 .deb
+        run: |
+          make clean
+          make
+          make debian-deb
+
+      - name: Collect .deb
+        run: |
+          mkdir -p dist/upload
+          deb="$(ls -1 ../*.deb 2>/dev/null | head -1)"
+          test -n "$deb"
+          cp "$deb" dist/upload/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-arm64-deb
+          path: dist/upload/
+
+  build-rpm:
+    name: build-rpm
+    runs-on: ubuntu-24.04
+    container: fedora:42
+    needs: [verify-tag]
+    if: >
+      always() &&
+      (needs.verify-tag.result == 'success' || needs.verify-tag.result == 'skipped')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Fedora build dependencies
+        run: |
+          dnf install -y \
+            git rpm-build fpc gcc make unzip patch curl \
+            libevdev-devel systemd-rpm-macros
+
+      - name: Build RPM
+        run: |
+          make clean
+          make
+          make fedora-rpm
+
+      - name: Collect RPM
+        run: |
+          mkdir -p dist/upload
+          rpm="$(find build/rpmbuild/RPMS -name 'hambridge-*.rpm' ! -name '*debuginfo*' | head -1)"
+          test -n "$rpm"
+          cp "$rpm" dist/upload/
+          ls -la dist/upload/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-rpm
+          path: dist/upload/
+
+  github-release:
+    name: github-release
+    runs-on: ubuntu-24.04
+    needs: [build-artifacts, build-deb-arm64, build-rpm]
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Merge artifacts and checksums
+        run: |
+          mkdir -p dist/final
+          find artifacts -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.tar.gz' \) -exec cp -t dist/final {} +
+          cd dist/final
+          sha256sum *.tar.gz *.deb *.rpm 2>/dev/null | sort -u > SHA256SUMS
+          ls -la
+
+      - name: Release notes from CHANGELOG
+        run: ./scripts/ci/extract-changelog-section.sh "${GITHUB_REF_NAME#v}" > release-notes.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/final/*.tar.gz
+            dist/final/*.deb
+            dist/final/*.rpm
+            dist/final/SHA256SUMS
+          body_path: release-notes.md
+          generate_release_notes: false

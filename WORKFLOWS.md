@@ -25,8 +25,8 @@ full distro **`fpc`** package set (not a minimal `fpc` metapackage that omits FP
 ## Opening and landing a PR
 
 1. Push your branch and open a **pull request** against the protected branch (e.g. **`main`**).
-2. Wait for **GitHub Actions** (once **`.github/workflows/ci.yml`** exists per §10.6): the workflow
-   **must** run **`make`** then **`make test`** as the primary gate.
+2. Wait for **GitHub Actions** (**`.github/workflows/ci.yml`**, §10.6): the workflow **must** run
+   **`make`** then **`make test`** as the primary gate.
 3. Fix failures and push updates until checks are **green**.
 4. Request review; respond to feedback.
 5. **Merge** only after required checks pass (repository **branch protection** should require the
