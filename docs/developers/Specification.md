@@ -42,6 +42,10 @@ At a high level, HaMBridge supports:
 - **MQTT → VISCA**: subscribe to `device/<slug>/<command>` and send VISCA over serial
 - **VISCA → MQTT**: decode controller traffic (`controller/<slug>/...`) and device replies (`device/<slug>/...`)
 
+Automated verification (FPCUnit, **`make test`**, fixtures — §10) is planned as **v0.5.0**; CI wiring is **v0.5.2**
+(technical detail §10.6). **Contributor PR and release *process*** (checklists) lives in **`WORKFLOWS.md`**
+at the repository root.
+
 ---
 
 # 2. System Architecture
@@ -1139,11 +1143,13 @@ not committed; **`hambridge.lpr`** in `src/` is the program entry source.
 /docs/user/INSTALL.md
 /docs/developers/DEVELOPING.md
 /docs/user/ConfigurationGuide.md
+/WORKFLOWS.md                  # contributor PR and release process (human checklist)
 /.gitignore
 /LICENSE                       # GPL-3.0-or-later
 /docs/developers/Specification.md   # this file (architecture + spec)
 /CHANGELOG.md                  # release notes (human-oriented)
 /ROADMAP.md                    # backlog / planned work
+/tests/                        # FPCUnit tests + fixtures (v0.5.0+; see §10)
 /config/hambridge.yaml.example
 /config/mappings/visca.yaml.example
 /packaging/README.md             # systemd, sysusers, tmpfiles, udev templates
@@ -1214,6 +1220,8 @@ Unit responsibilities:
   See **`packaging/raspbian/README.md`**.
 * **`make install`** *(optional)* — install binary to `/usr/local/bin` and example configs under
   **`/etc/hambridge/config/`** (if implemented; match **`config/`** layout in the repository).
+* **`make test`** *(v0.5.0+)* — runs the automated test suite (FPCUnit); see §10. Must succeed locally
+  before changes are considered merge-ready; **GitHub Actions** required-check wiring is **v0.5.2**.
 
 ### Example config files
 
@@ -1286,6 +1294,196 @@ HaMBridge has a small dependency footprint:
 * MQTT = control plane
 * Pascal service = translation + state management
 * VISCA = execution plane (hardware)
+
+---
+
+# 10. Verification and automated tests (v0.5.0+)
+
+This section defines **how** HaMBridge is tested in-tree. It is **normative for contributors** once
+**v0.5.0** ships; until then it records the agreed target so implementations and CI can align.
+
+## 10.1 Goals and constraints
+
+* **Primary:** **unit tests** (fast, deterministic, no hardware).
+* **Secondary:** **integration tests** where achievable **without** dedicated cameras, serial USB
+  adapters, or `/dev/input` nodes in the default path.
+* **CI policy:** Automated tests **must pass before a PR is merged** (e.g. required status checks /
+  merge queue). **Opening a PR** does not by itself define success—**merge-ready checks** do.
+  **GitHub Actions** and branch-protection details are **v0.5.2**; until then, **`make test`** is the
+  developer gate.
+* **No hardware-in-the-loop (HIL) in CI:** default automated runs **must not** require physical
+  VISCA devices, real RS-485 wiring, or a specific evdev node. Optional **manual** or **lab**
+  workflows may exist outside this normative path.
+
+## 10.2 Framework and entry point
+
+* **Framework:** **FPCUnit** (ships with FPC: `fpcunit`, `testregistry`, `testutils`).
+* **Invocation:** **`make test`** from the repository root is the **canonical** local command (v0.5.0+).
+  Implementations **may** add additional targets (e.g. `make test-verbose`) but **`make test`** must
+  remain the documented default.
+
+## 10.3 Normative fixtures
+
+Fixtures live under **`tests/`** (recommended: **`tests/fixtures/`** for YAML/JSON/binary snippets).
+
+Categories **should** include:
+
+1. **Configuration loading** — minimal **`hambridge.yaml`** fragments (valid slices and invalid
+   slices) with **expected** outcomes: successful parse vs **fail-closed** startup error (exact
+   error class or substring may be implementation-defined but **must** be stable for a given fixture).
+2. **Validation rules** — duplicate endpoint slugs, UDP uniqueness (**`(udpHost, udpPort, deviceID)`**
+   on a bus; **no reuse** of **`(udpHost, udpPort)`** across buses), **`evdev`** bus
+   **`protocol_config.enabled`**, TLS object inconsistencies (cert without key), etc.
+3. **YAML / mapping edge cases** — as needed for the in-tree YAML path and **`device_mappings.visca`**
+   loader (empty sequences, nulls, accepted key casing).
+4. **VISCA mapping snippets** — small mapping documents or embedded strings that exercise one encode
+   path and one decode path without loading the full product mapping.
+
+Each fixture **should** be named so intent is obvious (e.g. `duplicate-udp-triple.yaml`).
+
+## 10.4 Golden I/O (wire bytes)
+
+Sony VISCA is a **vendor protocol**; there is **no** single public “VISCA RFC” test vector suite.
+Golden bytes are therefore **project fixtures** derived from **documented external references** and
+**in-repo mapping** behavior.
+
+* **VISCA over UDP / controller-oriented ingest (UDP path):** use **Bitfocus Companion** published
+  **Sony VISCA** byte sequences — e.g. `https://bitfocus.io/connections/sony-visca` and related
+  connection docs — as **golden datagram payloads** for tests that exercise UDP receive → frame
+  extraction → decode / MQTT JSON shape. **Attribute** those fixtures in source or fixture headers
+  (URL + date retrieved) so updates can be traced.
+* **Serial / device command path (TX to wire):** use **Marshall CV344**–oriented expectations—i.e.
+  byte sequences that the **CV344** is documented or observed to accept for the scenarios under test,
+  aligned with the **`marshall-cv344`** (or equivalent) model entry in the VISCA mapping. When
+  manufacturer PDFs are unavailable, **mapping-derived** bytes from **`config/mappings/`** examples
+  are acceptable **provided** they are locked as fixtures and any mapping change updates the test.
+
+Golden tests **compare** encoder/decoder output to fixture bytes or hex strings; they **do not**
+require live serial or UDP I/O in CI.
+
+## 10.5 MQTT broker in tests
+
+**“Broker”** means the **MQTT server** the bridge connects to (`bridge.mqtt.host` / `port`).
+
+For integration tests that exercise **`mqttpublisher`** or end-to-end subscribe/publish:
+
+* Implementations **may** use any approach that keeps CI deterministic: **embedded test MQTT stub**,
+  **Mosquitto in a container**, **mock client** that records publishes, or **no broker** if the test
+  stays below the MQTT layer.
+* The specification **does not** mandate a particular broker product; choose **whatever fits**
+  the test harness and CI environment (v0.5.2).
+
+## 10.6 CI and release builds (v0.5.2, planning)
+
+This subsection is the **normative description of the automated build and release pipeline** (GitHub
+Actions): runner classes, Docker usage, ARM behaviour, job ordering, and artifacts. **Human-facing
+checklists** (what a developer does before opening a PR, how to cut a release) live in
+**`WORKFLOWS.md`** at the repository root.
+
+### 10.6.1 Free tier and hosted runners
+
+GitHub Actions for this project **must** stay within **no-cost** constraints for a **public**
+repository: **default** **GitHub-hosted** runners (standard **`ubuntu-*`** Linux images), **no**
+**larger** runners, **no** organization-only paid features, **no** paid **merge queue** tiers.
+
+**Fedora is not** a native **`runs-on`** image on GitHub-hosted runners; use **`ubuntu-*`** for the
+VM and run Fedora-specific work inside a **Docker** job container (see §10.6.3).
+
+Optional **ARM Linux** or **macOS** jobs are allowed only when they remain **free** for that
+repository (GitHub’s matrix changes over time — verify current docs). If **ARM** hosted runners are
+unavailable, ship **x86_64** artifacts from Ubuntu and document **Raspberry Pi** / **Raspbian-class**
+builds under **`packaging/raspbian/README.md`** (native on device or QEMU locally).
+
+### 10.6.2 Docker on hosted runners (including free plan)
+
+**Yes:** the standard **`ubuntu-*`** hosted image includes **Docker**. A workflow job **may** set
+**`container:`** to an image such as **`fedora:42`** or **`debian:bookworm`** so **compile / RPM /
+mock** steps run in that userspace **on top of** the Ubuntu runner. There is **no** extra “Docker
+tier” fee beyond normal **Actions minutes** for public repos on the free plan.
+
+**Fedora / RPM:** because there is **no** Fedora-hosted runner SKU, **RPM builds in CI** **should**
+use **`jobs.<id>.container: fedora:…`** (or equivalent) on **`runs-on: ubuntu-*`**, or document
+**out-of-band** RPM builds (COPR, local `rpmbuild`).
+
+### 10.6.3 ARM / Raspbian-class builds in Docker (free plan)
+
+**Goal:** produce or validate **armhf** / **aarch64** binaries without requiring a physical Pi in CI.
+
+* **`runs-on: ubuntu-latest`** (amd64) **+** **`arm64v8/...`** or **`arm32v7/...`** **container:**
+  requires **QEMU** user-mode (e.g. **`docker/setup-qemu-action`** plus **buildx**). This **works on
+  the free plan** but is **slower** and can be **less reliable** than native ARM.
+
+* **`runs-on:`** an **ARM64** GitHub-hosted label (e.g. **`ubuntu-24.04-arm`**) **when available**
+  to the repo: run **`arm64v8/debian`** (or similar **aarch64** image) **without QEMU** for
+  **native** ARM64 compile smoke — preferred when the runner exists.
+
+**“Raspbian”:** GitHub does **not** provide a **Raspberry Pi OS**-only runner. Use a **Docker image**
+whose **ABI** matches the target (**`armhf`** vs **`aarch64`**) — commonly **`arm64v8/debian`** for
+64-bit Pi userspace — or a community image that tracks Pi OS; **exact** rootfs parity with Raspberry
+Pi OS is **not** required for **compile** CI if the **ABI** and **glibc** expectations are documented.
+
+### 10.6.4 Pull-request pipeline (required shape)
+
+Workflow file (example): **`.github/workflows/ci.yml`**.
+
+* **Trigger:** **`pull_request`** on protected branches (e.g. **`main`**).
+
+* **Job 1 — `build-and-test` (required for merge):**
+  * Checkout (shallow fetch is acceptable).
+  * Install OS packages: **`fpc`**, **`libevdev-dev`**, **`make`**, **`unzip`**, **`curl`** (and any
+    other deps listed in **`docs/user/INSTALL.md`** / **`packaging/raspbian`** for parity with
+    developer machines).
+  * Optionally read **`release-pins.json`** (§10.6.6) and export **`GITHUB_ENV`** (e.g. fixed
+    **`ubuntu-24.04`** label).
+  * **`make`** — must succeed (first build may download the pinned **`fpc-mqtt-client`** zip).
+  * **`make test`** — **must** be the **first** substantive success gate; it **must** pass before
+    any other job in the same workflow is treated as green.
+  * Optional follow-on jobs (pins drift, packaging smoke) **must** **`needs:`** **`build-and-test`**.
+
+### 10.6.5 Release pipeline (build process)
+
+Workflow file (example): **`.github/workflows/release.yml`**.
+
+* **Trigger:** **`push`** of tags **`v*.*.*`**, and optionally **`workflow_dispatch`** for dry runs.
+
+* **Job 1 — `verify-tag`:** fail if the git tag **`vX.Y.Z`** does not match **`AppVersion`** in
+  **`src/hambridge.lpr`** and the same version in **`Makefile`** (**`RPM_VER`**),
+  **`packaging/Redhat/hambridge.spec`**, and **`packaging/debian/changelog`**.
+
+* **Job 2 — `build-artifacts`:** **`needs: verify-tag`**. On a pinned **`ubuntu-*`** runner (or as
+  documented in **`release-pins.json`**): **`make clean && make && make test`**. Produce at least:
+  * **`hambridge-{version}-linux-x86_64.tar.gz`** — archive including **`build/hambridge`**, **`LICENSE`**, **`README.md`**, and example configs under **`config/`** (exact file list is implementation-defined but **must** be documented in release notes).
+  * **`SHA256SUMS`** — one line per uploaded blob for verification.
+
+  **Debian (`.deb`):** on **`ubuntu-*` amd64**, **`dpkg-buildpackage`** / **`make debian-deb`** as
+  implemented in the repository is the expected path for **amd64** artifacts.
+
+  **RPM:** use a **Fedora** **`container:`** step on **`ubuntu-*`** (§10.6.2) or omit RPM from
+  automated uploads and document **manual** / **COPR** builds.
+
+* **Job 3 — `github-release`:** attach tarball(s), **`SHA256SUMS`**, optional **`.deb`** / **`.rpm`**,
+  to the **GitHub Release** for the tag; release body **should** include the **`CHANGELOG.md`** section
+  for that version.
+
+### 10.6.6 Single file for release / CI pinning
+
+Keep **one machine-readable file** (recommended: **`release-pins.json`** at the repository root, or
+**`.github/release-pins.json`**) holding values CI and release workflows read in a first step, for
+example:
+
+* **`runs-on`** label for Linux jobs (e.g. **`ubuntu-24.04`**)
+* **Bundled MQTT client** tag and **SHA256** (must match **`Makefile`** / RPM spec **Source1** pin)
+* Optional: **FPC** package version string
+* Optional: **artifact** filename prefix or semver key
+
+**Workflows** read it with **`jq`** (no extra cost) and export **`GITHUB_ENV`**. To avoid drift:
+
+* add a **CI job** that asserts **`release-pins.json`** matches **`Makefile`** and **`hambridge.spec`**, or
+* a **maintainer script** that regenerates snippets from the JSON (document in **`DEVELOPING.md`**).
+
+The **`Makefile`** remains the **compile-time** authority for fetching **`fpc-mqtt-client`** until it
+is refactored to consume the same JSON; the pins file is the **contract** workflows and packaging
+agree on.
 
 ---
 

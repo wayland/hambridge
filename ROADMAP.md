@@ -130,10 +130,6 @@ Does Free Pascal have a testing suite?  If so, fill in some information here abo
 
 Set up GitHub Actions that will do a release.  A release should consist of packages for a) Redhat and b) Raspbian
 
-## v0.5.3 — Security Scan
-
-See if there's a skill for doing a security scan, then use that.  
-
 ## v1.0.0 — Release!
 
 When the Github Release actions fully work, release v1.0.0
