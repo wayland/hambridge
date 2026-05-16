@@ -1,8 +1,9 @@
 program hambridge;
 
 {
-  HaMBridge v0.4.0: single hambridge.yaml (+ VISCA mapping YAML); optional evdev→MQTT; MQTT device/#→VISCA;
-  serial VISCA RX; ACK/retry/commandAck; coalesce + state + redundant skip; reply decode + controller/<bus>/status.
+  HaMBridge: hambridge.yaml (+ VISCA mapping YAML); evdev→MQTT on controller/<slug>/event;
+  MQTT device/#→VISCA; serial/UDP VISCA RX; ACK/retry/commandAck; coalesce, state, redundant skip;
+  reply decode + controller/<slug>/status.
 }
 
 {$mode ObjFPC}{$H+}
@@ -128,7 +129,7 @@ begin
     MapPath := DiscoverViscaMappingPath(BridgePath, D);
     if MapPath = '' then
     begin
-      Log(llError, 'VISCA mapping not found (device_mappings.visca in hambridge.yaml, mappings/visca.yaml beside it, or BRIDGE_VISCA_MAPPING)');
+      Log(llError, 'VISCA mapping not found (device_mappings.visca, mappings/visca.yaml beside hambridge.yaml, or BRIDGE_VISCA_MAPPING)');
       Halt(1);
     end;
     LogFmt(llInfo, 'Using VISCA mapping %s', [MapPath]);

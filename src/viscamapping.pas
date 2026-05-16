@@ -1,7 +1,7 @@
 unit viscamapping;
 
 {
-  Loads visca-mapping.json (plan §3.3): per-model topic → VISCA packets.
+  Loads VISCA mapping YAML (device_mappings.visca): per-model topic → VISCA packets.
   v0.2.1: framed encoding (device byte + optional fixed middle hex + template slots + FF) with MQTT JSON
   and "variables" defaults; if template is absent/empty, bytes alone is the full middle (after device byte, before FF).
   v0.3.1: each template slot may be 1..8 wire bytes (JSON object with slot + width keys, or string = width 1);

@@ -268,7 +268,7 @@ begin
   inherited Destroy;
 end;
 
-{ Frees every input and clears the list (e.g. before rebuilding config — not used in v0.1 startup path). }
+{ Frees every input and clears the list (e.g. before rebuilding config — not used at startup today). }
 procedure TEvdevHub.Clear;
 var
   I: Integer;

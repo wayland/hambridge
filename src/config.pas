@@ -100,10 +100,6 @@ begin
     Exit('/etc/hambridge/config/hambridge.yaml');
   if FileExistsReadable('/etc/hambridge/config/hambridge.yml') then
     Exit('/etc/hambridge/config/hambridge.yml');
-  if FileExistsReadable('/etc/hambridge/hambridge.yaml') then
-    Exit('/etc/hambridge/hambridge.yaml');
-  if FileExistsReadable('/etc/hambridge/hambridge.yml') then
-    Exit('/etc/hambridge/hambridge.yml');
   Result := '';
 end;
 

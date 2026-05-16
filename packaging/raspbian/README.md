@@ -48,7 +48,7 @@ Optional: `git` if you clone the repository.
 ### Build
 
 ```bash
-cd /path/to/Visca-MQTT-bridge
+cd /path/to/hambridge
 make
 ./build/hambridge --version
 ```

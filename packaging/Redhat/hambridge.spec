@@ -19,7 +19,7 @@
 Name:           hambridge
 Version:        0.5.2
 Release:        1%{?dist}
-Summary:        HaMBridge — Linux evdev to MQTT bridge (Free Pascal)
+Summary:        HaMBridge — Hardware-MQTT bridge (evdev and VISCA, Free Pascal)
 
 License:        GPL-3.0-or-later
 # Set to your public clone URL when publishing the spec (COPR/SourceRPM metadata).
@@ -41,8 +41,9 @@ Requires:       openssl-libs
 Requires:       systemd
 
 %description
-HaMBridge publishes Linux input subsystem (evdev) events as JSON to an MQTT broker. v0.1 is
-evdev→MQTT only; VISCA/serial phases are planned separately.
+HaMBridge is a headless daemon that bridges hardware to MQTT: Linux evdev input as JSON on
+controller topics, MQTT device control to VISCA over serial (RS-232 / RS-485) or UDP, and VISCA
+ingress decode back to MQTT (telemetry, status, command acknowledgements).
 
 Configuration lives under /etc/hambridge/ (see %%doc examples). Install sysusers + tmpfiles
 snippets, adjust udev rules for your hardware, then enable hambridge.service.

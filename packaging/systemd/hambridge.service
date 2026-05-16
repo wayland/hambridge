@@ -1,5 +1,5 @@
 [Unit]
-Description=HaMBridge: Hardware-MQTT Bridge (evdev to MQTT)
+Description=HaMBridge: Hardware-MQTT Bridge (evdev and VISCA)
 After=network-online.target
 Wants=network-online.target
 

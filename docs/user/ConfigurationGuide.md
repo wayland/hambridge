@@ -31,7 +31,6 @@ The daemon picks the first file that exists, in this order:
 2. Path from **`BRIDGE_CONFIG`**
 3. **`.local/etc/config/hambridge.yaml`**, then **`.local/etc/config/hambridge.yml`**
 4. **`/etc/hambridge/config/hambridge.yaml`**, then **`/etc/hambridge/config/hambridge.yml`**
-5. **`/etc/hambridge/hambridge.yaml`**, then **`/etc/hambridge/hambridge.yml`**
 
 ## MQTT TLS
 
@@ -62,7 +61,7 @@ Any value under **`bridge`** can be overridden: prefix **`BRIDGE_`**, uppercase,
 
 ### Device control
 
-- **`device/<slug>/<command>`** — publish a **JSON** body to drive a VISCA device; **`slug`** matches **`devices[].slug`**. Command names are slash-separated (e.g. **`preset/call`**).
+- **`device/<slug>/<command>`** — publish a **JSON** body to drive a VISCA device; **`slug`** matches the **`endpoints[]`** entry with **`match.endpoint_type: device`**. Command names are slash-separated (e.g. **`preset/call`**).
 
 ### Telemetry and status
 
@@ -77,7 +76,7 @@ Any value under **`bridge`** can be overridden: prefix **`BRIDGE_`**, uppercase,
 
 ### Evdev (if configured)
 
-- **`evdev/<slug>/event`** or the topic you set per input — each kernel input event as JSON.
+- **`controller/<slug>/event`** by default ( **`endpoints[]`** with **`match.protocol: evdev`** ), or the topic from **`mqttTopic`** on that endpoint — each kernel input event as JSON.
 
 ## Further reading
 

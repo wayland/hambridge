@@ -11,8 +11,6 @@
 /packaging/debian/*.substvars
 /packaging/debian/*.debhelper.log
 
-# Optional: ignore a leftover vendored clone from older workflows
-/third_party/fpc-mqtt-client/
 /bin/
 hambridge
 
@@ -35,13 +33,8 @@ backup/
 lib/
 
 # Local config (commit only the .example variants)
-/bridge.json
-/devices.json
-/visca-mapping.json
 /hambridge.yaml
 /hambridge.yml
-/visca-mapping.yaml
-/visca-mapping.yml
 /mappings/visca.yaml
 /mappings/visca.yml
 /config/hambridge.yaml

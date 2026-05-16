@@ -1,6 +1,6 @@
 # VISCA topic → wire mapping (YAML). Path is set in config/hambridge.yaml as device_mappings.visca
 # (convention: mappings/visca.yaml next to hambridge.yaml). Copy to config/mappings/visca.yaml.
-# Wire order: [device] = 0x80 + viscaAddress from hambridge.yaml top-level devices[], then hex bytes,
+# Wire order: [device] = 0x80 + viscaAddress from the device endpoint (match.deviceID), then hex bytes,
 # then one byte per template slot, then FF. Template keys match MQTT JSON (case-insensitive).
 
 models:

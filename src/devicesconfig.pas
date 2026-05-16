@@ -102,7 +102,7 @@ type
 function LoadDevicesConfig(const Path: string): TDevicesConfig;
 { Raises if evdev or VISCA sections are internally inconsistent. }
 procedure ValidateDevicesConfig(const D: TDevicesConfig);
-{ Resolves VISCA mapping: BRIDGE_VISCA_MAPPING, device_mappings.visca (relative to main config dir), defaults. }
+{ Resolves VISCA mapping YAML: BRIDGE_VISCA_MAPPING, device_mappings.visca, mappings/visca.yaml. }
 function DiscoverViscaMappingPath(const MainConfigPath: string; const D: TDevicesConfig): string;
 
 implementation
@@ -253,25 +253,14 @@ begin
       if SameText(Transport, 'serial') then
       begin
         { Serial VISCA }
-        if Tc <> nil then
-        begin
-          Buses[OutCount].Port := JsonGetString(Tc, 'port', '');
-          Buses[OutCount].Baud := JsonGetInt(Tc, 'baud', 9600);
-          Buses[OutCount].DataBits := JsonGetInt(Tc, 'dataBits', 8);
-          Buses[OutCount].Parity := JsonGetChar(Tc, 'parity', 'N');
-          Buses[OutCount].StopBits := JsonGetInt(Tc, 'stopBits', 1);
-          Rs485Obj := ObjGetObjectCI(Tc, 'rs485');
-        end
-        else
-        begin
-          { legacy siblings }
-          Buses[OutCount].Port := JsonGetString(Row, 'port', '');
-          Buses[OutCount].Baud := JsonGetInt(Row, 'baud', 9600);
-          Buses[OutCount].DataBits := JsonGetInt(Row, 'dataBits', 8);
-          Buses[OutCount].Parity := JsonGetChar(Row, 'parity', 'N');
-          Buses[OutCount].StopBits := JsonGetInt(Row, 'stopBits', 1);
-          Rs485Obj := ObjGetObjectCI(Row, 'rs485');
-        end;
+        if Tc = nil then
+          raise Exception.Create('hambridge.yaml: serial bus "' + Name + '" needs transport_configuration');
+        Buses[OutCount].Port := JsonGetString(Tc, 'port', '');
+        Buses[OutCount].Baud := JsonGetInt(Tc, 'baud', 9600);
+        Buses[OutCount].DataBits := JsonGetInt(Tc, 'dataBits', 8);
+        Buses[OutCount].Parity := JsonGetChar(Tc, 'parity', 'N');
+        Buses[OutCount].StopBits := JsonGetInt(Tc, 'stopBits', 1);
+        Rs485Obj := ObjGetObjectCI(Tc, 'rs485');
         if Rs485Obj <> nil then
         begin
           Buses[OutCount].Rs485.Enabled := JsonGetBool(Rs485Obj, 'enabled', False);
@@ -281,7 +270,7 @@ begin
           Buses[OutCount].Rs485.DelayRtsAfterSend := Cardinal(Max(0, JsonGetInt(Rs485Obj, 'delayRtsAfterSend', 0)));
         end;
         if Buses[OutCount].Port = '' then
-          raise Exception.Create('hambridge.yaml: bus "' + Name + '" needs transport_configuration.port (or legacy port)');
+          raise Exception.Create('hambridge.yaml: bus "' + Name + '" needs transport_configuration.port');
       end
       else
       begin
@@ -507,7 +496,7 @@ begin
       begin
         if not SameText(Meta[BusIx].Protocol, 'visca') then
           raise Exception.Create('hambridge.yaml: controller endpoint "' + Slug + '" protocol visca requires a visca bus');
-        { one controller endpoint per bus is required for UDP; allowed for serial too (falls back to legacy bus topic if omitted). }
+        { UDP requires exactly one visca controller endpoint per bus (validated later); serial may omit it (router uses bus id for topics). }
         SetLength(Controllers, Length(Controllers) + 1);
         Controllers[High(Controllers)].Slug := Slug;
         Controllers[High(Controllers)].BusId := BusId;
@@ -542,10 +531,6 @@ begin
     Dm := ObjGetObjectCI(Root, 'device_mappings');
     if Dm <> nil then
       Result.ViscaMappingPath := JsonGetString(Dm, 'visca', '');
-    if Result.ViscaMappingPath = '' then
-      Result.ViscaMappingPath := JsonGetString(Root, 'viscaMapping', '');
-    if Result.ViscaMappingPath = '' then
-      Result.ViscaMappingPath := JsonGetString(Root, 'visca_mapping', '');
     LoadEndpoints(Root, Result.BusMeta, Result.ViscaBuses, Result.ViscaDevices, TmpInputs, Result.ViscaControllers, Result.EvdevEnabled);
     Result.EvdevInputs := TmpInputs;
   finally
@@ -662,18 +647,14 @@ begin
     cand := IncludeTrailingPathDelimiter(base) + 'visca.yaml';
     if FileExists(cand) then
       Exit(cand);
-    cand := IncludeTrailingPathDelimiter(base) + 'visca-mapping.json';
+    cand := IncludeTrailingPathDelimiter(base) + 'visca.yml';
     if FileExists(cand) then
       Exit(cand);
   end;
-  if FileExists('visca.yaml') then
-    Exit('visca.yaml');
-  if FileExists('visca-mapping.json') then
-    Exit('visca-mapping.json');
   cand := '/etc/hambridge/config/mappings/visca.yaml';
   if FileExists(cand) then
     Exit(cand);
-  cand := '/etc/hambridge/visca-mapping.json';
+  cand := '/etc/hambridge/config/mappings/visca.yml';
   if FileExists(cand) then
     Exit(cand);
 end;

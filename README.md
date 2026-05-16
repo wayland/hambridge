@@ -1,16 +1,17 @@
 # HaMBridge (Hardware-MQTT Bridge)
 
-A headless Linux daemon that bridges **hardware ↔ MQTT**.
+A headless Linux daemon that bridges **hardware ↔ MQTT** (Linux **evdev**, **VISCA** over serial or UDP,
+and related controller/device traffic).
 
-The v0.1 binary is **`hambridge`**; systemd and packaging use the **HaMBridge** product name and
-**`/etc/hambridge/`** for machine-local state; **target** YAML config lives under **`/etc/hambridge/config/`**
+The shipped binary is **`hambridge`**; systemd and packaging use the **HaMBridge** product name and
+**`/etc/hambridge/`** for machine-local state. **Target** YAML config lives under **`/etc/hambridge/config/`**
 (see **[docs/user/ConfigurationGuide.md](docs/user/ConfigurationGuide.md)**).
 
 ## Summary
 
 | Input | Output | MQTT Topic | Description |
 |-------|--------|------------|-------------|
-| Linux evdev | MQTT JSON | `evdev/<slug>/event` (pub)* | Publish kernel input events as JSON. From (`/dev/input/event*`) |
+| Linux evdev | MQTT JSON | `controller/<slug>/event` (pub)* | Publish kernel input events as JSON (`/dev/input/event*`, **`endpoints`** with **`match.protocol: evdev`**) |
 | Serial VISCA | MQTT JSON | `controller/<bus-slug>/event` (pub), `controller/<bus-slug>/status` (pub), `device/<slug>/telemetry` (pub), `device/<slug>/status` (pub), `device/<slug>/commandAck` (pub) | Decode controller traffic and device replies and publish JSON for subscribers. |
 | MQTT JSON | VISCA over serial (RS-232 / RS-485) | `device/<slug>/<command>` (sub) (bridge subscribes to `device/#`) | Encode JSON payloads using the file in **`device_mappings.visca`** (path relative to **`hambridge.yaml`**; repo templates use **`config/mappings/visca.yaml`** when you **`--config ./config/hambridge.yaml`**) and transmit on the device’s bus. |
 

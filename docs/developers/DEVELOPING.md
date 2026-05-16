@@ -6,11 +6,11 @@ End-user configuration is in [ConfigurationGuide.md](../user/ConfigurationGuide.
 [CHANGELOG.md](../../CHANGELOG.md). **Backlog / upcoming minors:** [ROADMAP.md](../../ROADMAP.md). For full
 architecture and protocol contracts (implementers), see [Specification.md](Specification.md).
 
-The product name is **HaMBridge**; the v0.1 build produces the `hambridge` binary.
+The product name is **HaMBridge**; the build produces the **`hambridge`** binary.
 
-## Toolchain (v0.1)
+## Toolchain
 
-- **Linux** (v0.1 is Linux-only because of `libevdev`).
+- **Linux** (Linux-only today because of **`libevdev`**).
 - **Free Pascal Compiler** 3.2.x or newer (`fpc`).
 - **GNU Make** (`make`).
 - **`curl`**, **`unzip`**, and **`patch`** — used once per clean tree to fetch the MQTT client zip and apply `patches/fpc-mqtt-client-*-tls-verify-before-connect.patch`.
@@ -66,7 +66,7 @@ described in `Specification.md`.
 copy that zip into the same path on an air-gapped tree (before `make`) so `curl` is never
 invoked; `sha256sum` still validates the file before unzip.
 
-## Source layout (v0.1)
+## Source layout
 
 See `Specification.md` for a high-level architecture and MQTT surface.
 

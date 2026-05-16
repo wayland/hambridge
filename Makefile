@@ -119,7 +119,7 @@ run: $(BINARY)
 raspbian-help:
 	@echo 'Raspberry Pi OS / Debian (on the Pi):'
 	@echo '  sudo apt-get update && sudo apt-get install -y fpc fp-units-fcl fp-units-rtl libevdev-dev make unzip curl patch'
-	@echo '  cd /path/to/Visca-MQTT-bridge && make'
+	@echo '  cd /path/to/hambridge && make'
 	@echo '  ./build/hambridge --version'
 	@echo 'Runtime: sudo apt-get install -y libevdev2 (or libevdev2 + matching arch multiarch).'
 	@echo 'Debian .deb: sudo apt-get install -y build-essential debhelper fakeroot fpc libevdev-dev make unzip curl patch'

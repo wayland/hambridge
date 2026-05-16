@@ -1,4 +1,4 @@
-# HaMBridge — single YAML configuration (v0.4.0+).
+# HaMBridge — single YAML configuration.
 # Copy to config/hambridge.yaml and edit. From a clone, run with an explicit path, e.g.:
 #   ./build/hambridge --config ./config/hambridge.yaml
 # Default discovery does not load ./config/hambridge.yaml by itself.

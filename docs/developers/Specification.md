@@ -1,11 +1,14 @@
-# 📡 MQTT ↔ VISCA Bridge (Object Pascal / Free Pascal)
+# HaMBridge — Hardware-MQTT Bridge (Object Pascal / Free Pascal)
 
-**Product name:** **HaMBridge** (Hardware-MQTT Bridge) — a headless Linux daemon; this repository
-and specification focus on MQTT, Linux input (evdev), and VISCA/serial.
+**Product name:** **HaMBridge** (Hardware-MQTT Bridge) — a headless Linux daemon. This specification
+covers MQTT, Linux input (**evdev**), and **VISCA** (serial RS-232 / RS-485 and UDP), among other
+hardware paths the product may add over time.
 
 ## 1. Purpose
 
-This project implements a **bidirectional bridge between MQTT and Sony VISCA camera control protocol** over serial (RS-232 / RS-485).
+HaMBridge bridges **hardware and MQTT**. A core capability is a **bidirectional MQTT ↔ Sony VISCA**
+path over serial (RS-232 / RS-485) and UDP; another is **Linux evdev → MQTT** on controller endpoints
+(§3.1.2).
 
 ### Core function:
 
@@ -268,7 +271,6 @@ file wins:
 3. **`.local/etc/config/hambridge.yaml`**, then **`.local/etc/config/hambridge.yml`** (relative to the process working directory)
 4. **`/etc/hambridge/config/hambridge.yaml`**, then **`/etc/hambridge/config/hambridge.yml`**
    (recommended for **HaMBridge** systemd packages; see `packaging/systemd/`)
-5. **`/etc/hambridge/hambridge.yaml`**, then **`/etc/hambridge/hambridge.yml`** (legacy single-file layout)
 
 There is **no** fallback that searches **`./config/`** or the current directory by name: a checkout or
 any non-standard layout **must** use step **1** or **2**. **`docs/user/ConfigurationGuide.md`** describes this for operators.

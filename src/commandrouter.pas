@@ -1,7 +1,7 @@
 unit commandrouter;
 
 {
-  MQTT device/# → VISCA bytes via visca-mapping.json, per-bus queue and inter-command spacing.
+  MQTT device/# → VISCA bytes via VISCA mapping YAML, per-bus queue and inter-command spacing.
   v0.2.1: queued commands carry MQTT JSON for framed template encoding.
   v0.3: serial RX (VISCA frames to FF), decode controller packets → controller/<bus>/event,
         device replies → device/<slug>/telemetry and status snapshot on controller/reply.
