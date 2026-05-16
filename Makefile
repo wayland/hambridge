@@ -12,6 +12,7 @@ FPC_MQTT_SHA256 := 702ded75607d2ba8429fffc3509bbb7607466be9596bc23d8bd73c13f8e74
 MQTTZIP := $(OUTDIR)/deps/fpc-mqtt-client-$(FPC_MQTT_TAG).zip
 MQTT_EXTRACT := $(OUTDIR)/deps/fpc-mqtt-client-$(FPC_MQTT_TAG)
 MQTTDIR := $(MQTT_EXTRACT)/mqtt
+MQTT_PATCH := patches/fpc-mqtt-client-$(FPC_MQTT_TAG)-tls-verify-before-connect.patch
 
 FPCFLAGS := -MObjFPC -Scghi -O2 -gl -Xs
 FPCFLAGS += -Fu$(SRCDIR) -Fu$(MQTTDIR) -FU$(OUTDIR)
@@ -28,7 +29,7 @@ FPCFLAGS += -k-L$(EVDEV_LDIR) -k-l:libevdev.so.2
 FPCFLAGS += -Fl/usr/lib64 -Fl/usr/lib/x86_64-linux-gnu -Fl/usr/lib/aarch64-linux-gnu -Fl/usr/lib/arm-linux-gnueabihf
 
 # Keep in sync with src/hambridge.lpr AppVersion and packaging/Redhat/hambridge.spec Version.
-RPM_VER := 0.5.0
+RPM_VER := 0.5.1
 
 # FPCUnit (fcl-fpcunit) for `make test` — path varies by distro / multiarch.
 FPC_VER := $(shell fpc -iV 2>/dev/null)
@@ -36,9 +37,9 @@ FPC_OS := $(shell fpc -iTO 2>/dev/null)
 FPC_CPU := $(shell fpc -iTP 2>/dev/null)
 FPCUNIT_DIR := $(firstword $(wildcard /usr/lib64/fpc/$(FPC_VER)/units/$(FPC_CPU)-$(FPC_OS)/fcl-fpcunit) \
   $(wildcard /usr/lib/fpc/$(FPC_VER)/units/$(FPC_CPU)-$(FPC_OS)/fcl-fpcunit))
-TESTSRC := tests/hambridge_tests.lpr tests/fixturepaths.pas tests/test_devicesconfig.pas tests/test_viscamapping.pas
+TESTSRC := tests/hambridge_tests.lpr tests/fixturepaths.pas tests/test_devicesconfig.pas tests/test_viscamapping.pas tests/test_bridgeconfig.pas
 TESTBIN := $(OUTDIR)/hambridge_tests
-TESTFLAGS := -MObjFPC -Scghi -O2 -gl -Futests -Fu$(SRCDIR) -Fu$(MQTTDIR) -Fu$(FPCUNIT_DIR) -FU$(OUTDIR)
+TESTFLAGS := -MObjFPC -Scghi -O2 -gl -Futests -Fusrc -Fu$(MQTTDIR) -Fu$(FPCUNIT_DIR) -FU$(OUTDIR)
 ifeq ($(FPCUNIT_DIR),)
 $(error fcl-fpcunit not found (FPC $(FPC_VER), $(FPC_CPU)-$(FPC_OS)) — install the full fpc / fpc-src package that provides FPCUnit)
 endif
@@ -52,9 +53,10 @@ all: $(BINARY)
 $(OUTDIR):
 	mkdir -p $(OUTDIR)
 
-# Fetch and verify MQTT client sources (first build needs network: curl + unzip).
-$(MQTTDIR)/mqtt.pas: | $(OUTDIR)
+# Fetch, verify, unzip, and patch MQTT client sources (first build needs network: curl + unzip + patch).
+$(MQTTDIR)/mqtt.pas: $(MQTT_PATCH) | $(OUTDIR)
 	@set -e; \
+	command -v patch >/dev/null 2>&1 || { echo 'patch(1) required (e.g. dnf install patch, apt install patch)' >&2; exit 1; }; \
 	mkdir -p $(dir $(MQTTZIP)); \
 	if [ ! -f '$(MQTTZIP)' ]; then \
 	  tmp="$(MQTTZIP).$$$$.part"; \
@@ -63,7 +65,12 @@ $(MQTTDIR)/mqtt.pas: | $(OUTDIR)
 	fi; \
 	echo '$(FPC_MQTT_SHA256)  $(MQTTZIP)' | sha256sum -c -; \
 	rm -rf '$(MQTT_EXTRACT)'; \
-	unzip -qo '$(MQTTZIP)' -d '$(OUTDIR)/deps'
+	unzip -qo '$(MQTTZIP)' -d '$(OUTDIR)/deps'; \
+	if ! grep -q 'TLS verification rejected by application' '$(MQTTDIR)/mqtt.pas'; then \
+	  patch -d '$(MQTT_EXTRACT)' -p1 --forward --batch < '$(CURDIR)/$(MQTT_PATCH)'; \
+	fi; \
+	grep -q 'TLS verification rejected by application' '$(MQTTDIR)/mqtt.pas' \
+	  || { echo 'MQTT patch did not apply — check $(MQTT_PATCH) vs FPC_MQTT_TAG' >&2; exit 1; }
 
 $(BINARY): $(OUTDIR) $(MQTTDIR)/mqtt.pas $(SRCDIR)/hambridge.lpr $(wildcard $(SRCDIR)/*.pas) $(wildcard $(MQTTDIR)/*.pas)
 	$(FPC) $(FPCFLAGS) -o$(BINARY) $(SRCDIR)/hambridge.lpr
@@ -86,11 +93,11 @@ run: $(BINARY)
 # Native build on Raspberry Pi OS / Debian: install deps then `make` (see packaging/raspbian/README.md).
 raspbian-help:
 	@echo 'Raspberry Pi OS / Debian (on the Pi):'
-	@echo '  sudo apt-get update && sudo apt-get install -y fpc fp-units-fcl fp-units-rtl libevdev-dev make unzip curl'
+	@echo '  sudo apt-get update && sudo apt-get install -y fpc fp-units-fcl fp-units-rtl libevdev-dev make unzip curl patch'
 	@echo '  cd /path/to/Visca-MQTT-bridge && make'
 	@echo '  ./build/hambridge --version'
 	@echo 'Runtime: sudo apt-get install -y libevdev2 (or libevdev2 + matching arch multiarch).'
-	@echo 'Debian .deb: sudo apt-get install -y build-essential debhelper fakeroot fpc libevdev-dev make unzip curl'
+	@echo 'Debian .deb: sudo apt-get install -y build-essential debhelper fakeroot fpc libevdev-dev make unzip curl patch'
 	@echo '  then: make debian-deb   (outputs ../hambridge_*_*.deb — see packaging/raspbian/README.md; debian/ → packaging/debian)'
 
 # Debian / Raspberry Pi OS .deb (run on Debian-derived host; dpkg-buildpackage writes to parent dir).
@@ -98,7 +105,7 @@ debian-deb:
 	@command -v dpkg-buildpackage >/dev/null 2>&1 || { echo 'debian-deb: install dpkg-dev debhelper (Debian/Raspberry Pi OS)' >&2; exit 1; }
 	dpkg-buildpackage -us -uc -b -rfakeroot
 
-# --- Fedora RPM (needs: git, rpm-build, fpc, gcc, make, unzip, systemd-rpm-macros) ---
+# --- Fedora RPM (needs: git, rpm-build, fpc, gcc, make, unzip, patch, systemd-rpm-macros) ---
 # Uses a private rpmbuild tree under build/rpmbuild/ (removed by make clean).
 # Source1 zip is copied from build/deps/ when present to avoid an extra download.
 

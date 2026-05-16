@@ -10,7 +10,8 @@ program hambridge_tests;
 uses
   consoletestrunner,
   test_devicesconfig,
-  test_viscamapping;
+  test_viscamapping,
+  test_bridgeconfig;
 
 var
   App: TTestRunner;

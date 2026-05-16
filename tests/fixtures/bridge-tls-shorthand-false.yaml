@@ -1,0 +1,5 @@
+bridge:
+  mqtt:
+    host: plain.example
+    port: 1883
+    tls: false

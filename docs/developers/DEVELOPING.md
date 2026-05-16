@@ -13,12 +13,12 @@ The product name is **HaMBridge**; the v0.1 build produces the `hambridge` binar
 - **Linux** (v0.1 is Linux-only because of `libevdev`).
 - **Free Pascal Compiler** 3.2.x or newer (`fpc`).
 - **GNU Make** (`make`).
-- **`curl`** and **`unzip`** — used once per clean tree to fetch the MQTT client zip.
+- **`curl`**, **`unzip`**, and **`patch`** — used once per clean tree to fetch the MQTT client zip and apply `patches/fpc-mqtt-client-*-tls-verify-before-connect.patch`.
 - **MQTT client**: [prof7bit/fpc-mqtt-client](https://github.com/prof7bit/fpc-mqtt-client) is
   **downloaded when you run `make`**: the Makefile fetches a pinned release zip into
   `build/deps/`, checks **SHA256**, and unpacks it. The first build needs **network access**,
-  `curl`, and `unzip`. Bump the tag and checksum in the `Makefile` when you intentionally
-  upgrade the client.
+  `curl`, `unzip`, and `patch`. Bump the tag and checksum in the `Makefile` when you intentionally
+  upgrade the client; re-apply or refresh the TLS patch if `mqtt.pas` changed upstream (see `patches/README.md`).
 - **`libevdev` shared library** (`libevdev.so.2`) in a standard library directory so the
   Makefile can link against it:
 

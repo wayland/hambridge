@@ -123,12 +123,12 @@ per **`Specification.md` §3.4.
 
 ## v0.5.1 — TLS Configuration (Optional)
 
-**Intent:** implement full MQTT TLS configuration while keeping TLS **optional**.
+**Shipped:** full **`bridge.mqtt.tls`** object + boolean shorthand; CA file/path, client PEM + key, **`verifyPeer`**, **`serverName`** (cert verify + SNI), **`ciphers`**; build-time patch on **`fpc-mqtt-client`** so trust is applied before connect (see **`patches/README.md`**). **`minVersion`** / **`maxVersion`** parsed but not enforced (warn once — use **ciphers** / OpenSSL defaults).
 
 ### TLS Configuration Checklist
 
-- [ ] **Full TLS material** — CA bundle, client cert/key, and peer verification controls (beyond `tls: true` + OS default trust).
-- [ ] **Operational docs** — document common TLS deployment patterns and failure modes.
+- [x] **Full TLS material** — CA bundle (`caFile` / `caPath`), client cert/key, **`verifyPeer`**, SNI via **`serverName`**, **`ciphers`** (`Specification.md` §3.0).
+- [x] **Operational docs** — **`docs/user/ConfigurationGuide.md`** (MQTT TLS section) + **`CHANGELOG.md`** / **`Specification.md`**.
 
 ---
 
@@ -161,7 +161,7 @@ ACK / completion timing and **`scheduler.ackTimeoutMs`** are tracked under **v0.
 ## MQTT & `bridge` Subtree (Plan §3.0–3.1, §7)
 
 - [ ] **`log.format`: `json`** — Still reserved; operational logging is effectively **text** only.
-- [ ] **Full TLS configuration** — tracked under **v0.3.4** above.
+- [x] **Full TLS configuration** — **v0.5.1** above (`bridge.mqtt.tls`).
 - [ ] **Broader QoS usage** — Generic `PublishJson` uses **QoS 0** for evdev / VISCA-side publishes; not a full “QoS 0 and 1 everywhere” productization.
 
 MQTT acknowledgements for **bridge-originated VISCA** are tracked under **v0.3.1** above.

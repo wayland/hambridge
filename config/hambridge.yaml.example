@@ -14,6 +14,13 @@ bridge:
   mqtt:
     host: localhost
     port: 1883
+    # TLS: boolean shorthand, or an object (Specification.md / ConfigurationGuide — MQTT TLS).
+    # tls: false
+    # tls:
+    #   enabled: true
+    #   caFile: /etc/hambridge/tls/ca.crt
+    #   verifyPeer: true
+    #   serverName: mqtt.example.invalid
     tls: false
     username: null
     password: null

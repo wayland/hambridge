@@ -33,6 +33,27 @@ The daemon picks the first file that exists, in this order:
 4. **`/etc/hambridge/config/hambridge.yaml`**, then **`/etc/hambridge/config/hambridge.yml`**
 5. **`/etc/hambridge/hambridge.yaml`**, then **`/etc/hambridge/hambridge.yml`**
 
+## MQTT TLS
+
+`bridge.mqtt.tls` may be **`false`** / **`true`** (simple TLS on with defaults) or a **mapping** with:
+
+| Key | Meaning |
+|-----|---------|
+| **`enabled`** | Gates TLS when using the object form (default true if omitted). |
+| **`caFile`** | PEM file of trust anchors for the broker. |
+| **`caPath`** | Directory of hashed CA certs (OpenSSL `CApath`). If both **`caFile`** and **`caPath`** are set, behaviour matches **`Specification.md`**: prefer **`caFile`** for in-tree validation; the client applies **`caFile`** first, and **`caPath`** only when **`caFile`** is empty. |
+| **`clientCertFile`** / **`clientKeyFile`** | Mutual TLS; both required together. Paths must exist at startup or the daemon exits. |
+| **`verifyPeer`** | When TLS is on, validates the broker certificate (default true). **`false`** disables verification — **insecure**; the bridge logs a high-visibility warning once. |
+| **`serverName`** | TLS hostname for verification and SNI when it differs from **`mqtt.host`** (e.g. broker reached by IP). Default: **`mqtt.host`**. |
+| **`minVersion`** / **`maxVersion`** | Reserved strings (`TLSv1.2`, …); **not enforced** in this build — a warning is logged once; use **`ciphers`** or rely on OpenSSL defaults. |
+| **`ciphers`** | OpenSSL cipher list string passed to the underlying stack. |
+
+**Failure modes:** Wrong CA or hostname → TLS handshake fails; the MQTT client retries with backoff (same as TCP errors). **`verifyPeer: false`** defeats protection against man-in-the-middle on the network path to the broker.
+
+**Files:** PEM material is often installed under **`/etc/hambridge/tls/`** with restrictive permissions; the bridge never logs key PEM bodies. If the private key is **group- or world-readable**, startup logs a warning (see **`Specification.md`**).
+
+Environment overrides such as **`BRIDGE_MQTT_TLS_ENABLED`**, **`BRIDGE_MQTT_TLS_CAFILE`**, etc. follow the usual **`BRIDGE_`** rules (`Specification.md` §3.0).
+
 ## Environment overrides (`bridge` only)
 
 Any value under **`bridge`** can be overridden: prefix **`BRIDGE_`**, uppercase, use **`_`** between nested keys (e.g. **`BRIDGE_MQTT_HOST`**, **`BRIDGE_LOG_LEVEL`**). Environment wins over the file.

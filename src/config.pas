@@ -3,6 +3,7 @@ unit config;
 {
   Loads process-wide settings from hambridge.yaml top-level "bridge" (plan §3.0): MQTT broker,
   optional LWT/birth, logging. Applies BRIDGE_* environment overrides before reading values.
+  MQTT TLS: boolean shorthand or tls.* object (v0.5.1); path validation at load; key permission hint.
 }
 
 {$mode ObjFPC}{$H+}
@@ -31,11 +32,26 @@ type
     Qos: Byte;
   end;
 
+  { TLS options when TlsOn (from mqtt.tls boolean or object). }
+  TBridgeMqttTls = record
+    CaFile: string;
+    CaPath: string;
+    ClientCertFile: string;
+    ClientKeyFile: string;
+    VerifyPeer: Boolean;
+    ServerName: string;
+    MinVersion: string;
+    MaxVersion: string;
+    Ciphers: string;
+    KeyReadableByOthers: Boolean;
+  end;
+
   { Broker connection and MQTT session fields from bridge.mqtt. }
   TBridgeMqtt = record
     Host: string;         { Broker hostname or IP (required) }
     Port: Word;            { Broker TCP port (default 1883) }
-    Tls: Boolean;          { Use TLS when connecting (v0.1: OS default trust) }
+    TlsOn: Boolean;        { Use TLS (SSL) transport when true }
+    Tls: TBridgeMqttTls;   { CA, client auth, verify, SNI, ciphers (v0.5.1+) }
     Username: string;      { MQTT user; empty if anonymous }
     Password: string;      { MQTT password; empty if none }
     ClientId: string;      { Unique client id on the broker }
@@ -59,7 +75,7 @@ function LoadBridgeConfig(const Path: string): TBridgeConfig;
 implementation
 
 uses
-  StrUtils, jsonutil, yamlmin;
+  StrUtils, jsonutil, yamlmin, BaseUnix;
 
 { True if Path is non-empty and names an existing file (used for config discovery). }
 function FileExistsReadable(const Path: string): Boolean;
@@ -313,11 +329,50 @@ begin
   end;
 end;
 
+procedure DetectClientKeyWorldReadable(const KeyPath: string; out ReadableByOthers: Boolean);
+var
+  st: stat;
+begin
+  ReadableByOthers := False;
+  if KeyPath = '' then
+    Exit;
+  if fpStat(PChar(KeyPath), st) <> 0 then
+    Exit;
+  { Warn when group or other read bits are set (spec: key too exposed). }
+  ReadableByOthers := (st.st_mode and (S_IRGRP or S_IROTH)) <> 0;
+end;
+
+procedure ValidateAndFinalizeTls(var M: TBridgeMqtt);
+begin
+  if not M.TlsOn then
+    Exit;
+  if ((M.Tls.ClientCertFile <> '') and (M.Tls.ClientKeyFile = '')) or
+     ((M.Tls.ClientCertFile = '') and (M.Tls.ClientKeyFile <> '')) then
+    raise Exception.Create('hambridge.yaml: bridge.mqtt.tls requires clientCertFile and clientKeyFile together');
+  if M.Tls.CaFile <> '' then
+    if not FileExists(M.Tls.CaFile) then
+      raise Exception.Create('hambridge.yaml: bridge.mqtt.tls caFile not found: ' + M.Tls.CaFile);
+  if M.Tls.CaPath <> '' then
+    if not DirectoryExists(M.Tls.CaPath) then
+      raise Exception.Create('hambridge.yaml: bridge.mqtt.tls caPath is not a directory: ' + M.Tls.CaPath);
+  if M.Tls.ClientCertFile <> '' then
+    if not FileExists(M.Tls.ClientCertFile) then
+      raise Exception.Create('hambridge.yaml: bridge.mqtt.tls clientCertFile not found: ' + M.Tls.ClientCertFile);
+  if M.Tls.ClientKeyFile <> '' then
+  begin
+    if not FileExists(M.Tls.ClientKeyFile) then
+      raise Exception.Create('hambridge.yaml: bridge.mqtt.tls clientKeyFile not found: ' + M.Tls.ClientKeyFile);
+    DetectClientKeyWorldReadable(M.Tls.ClientKeyFile, M.Tls.KeyReadableByOthers);
+  end;
+end;
+
 { Fills TBridgeMqtt from the root object's "mqtt" child; raises if mqtt is missing. }
 function LoadMqttSection(Obj: TJSONObject): TBridgeMqtt;
 var
   M: TJSONObject;
   Lwt, Birth: TJSONObject;
+  TlsData: TJSONData;
+  TlsObj: TJSONObject;
 begin
   FillChar(Result, SizeOf(Result), 0);
   M := ObjGetObjectCI(Obj, 'mqtt');
@@ -325,7 +380,40 @@ begin
     raise Exception.Create('hambridge.yaml: bridge.mqtt object is required');
   Result.Host := JsonGetString(M, 'host', '');
   Result.Port := JsonGetWord(M, 'port', 1883);
-  Result.Tls := JsonGetBool(M, 'tls', False);
+  Result.TlsOn := False;
+  FillChar(Result.Tls, SizeOf(Result.Tls), 0);
+  Result.Tls.VerifyPeer := True;
+  TlsData := ObjFindCI(M, 'tls');
+  if TlsData <> nil then
+  begin
+    if TlsData.JSONType = jtNull then
+      Result.TlsOn := False
+    else if TlsData is TJSONBoolean then
+    begin
+      Result.TlsOn := TJSONBoolean(TlsData).AsBoolean;
+      if Result.TlsOn then
+        Result.Tls.VerifyPeer := True;
+    end
+    else if TlsData is TJSONObject then
+    begin
+      TlsObj := TJSONObject(TlsData);
+      Result.TlsOn := JsonGetBool(TlsObj, 'enabled', True);
+      if Result.TlsOn then
+      begin
+        Result.Tls.CaFile := JsonGetString(TlsObj, 'caFile', '');
+        Result.Tls.CaPath := JsonGetString(TlsObj, 'caPath', '');
+        Result.Tls.ClientCertFile := JsonGetString(TlsObj, 'clientCertFile', '');
+        Result.Tls.ClientKeyFile := JsonGetString(TlsObj, 'clientKeyFile', '');
+        Result.Tls.VerifyPeer := JsonGetBool(TlsObj, 'verifyPeer', True);
+        Result.Tls.ServerName := JsonGetString(TlsObj, 'serverName', '');
+        Result.Tls.MinVersion := JsonGetString(TlsObj, 'minVersion', '');
+        Result.Tls.MaxVersion := JsonGetString(TlsObj, 'maxVersion', '');
+        Result.Tls.Ciphers := JsonGetString(TlsObj, 'ciphers', '');
+      end;
+    end
+    else
+      raise Exception.Create('hambridge.yaml: bridge.mqtt.tls must be boolean, object, or null');
+  end;
   Result.Username := JsonGetString(M, 'username', '');
   Result.Password := JsonGetString(M, 'password', '');
   Result.ClientId := JsonGetString(M, 'clientId', 'hambridge');
@@ -348,6 +436,8 @@ begin
     Result.Birth.Retain := JsonGetBool(Birth, 'retain', True);
     Result.Birth.Qos := JsonGetByte(Birth, 'qos', 1);
   end;
+
+  ValidateAndFinalizeTls(Result);
 end;
 
 { Reads hambridge.yaml from disk, applies env overrides on the bridge subtree, validates. }

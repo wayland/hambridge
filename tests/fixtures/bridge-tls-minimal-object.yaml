@@ -1,0 +1,7 @@
+bridge:
+  mqtt:
+    host: broker.example
+    port: 8883
+    tls:
+      enabled: true
+      verifyPeer: true

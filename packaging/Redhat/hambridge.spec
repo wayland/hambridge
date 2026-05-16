@@ -17,7 +17,7 @@
 %global fpc_mqtt_sha256  702ded75607d2ba8429fffc3509bbb7607466be9596bc23d8bd73c13f8e74214
 
 Name:           hambridge
-Version:        0.5.0
+Version:        0.5.1
 Release:        1%{?dist}
 Summary:        HaMBridge — Linux evdev to MQTT bridge (Free Pascal)
 
@@ -33,6 +33,7 @@ BuildRequires:  fpc
 BuildRequires:  gcc
 BuildRequires:  make
 BuildRequires:  unzip
+BuildRequires:  patch
 BuildRequires:  systemd-rpm-macros
 
 Requires:       libevdev >= 1.5
@@ -87,7 +88,7 @@ install -Dpm0644 packaging/udev/70-hambridge-input.rules \
 
 %files
 %license LICENSE
-%doc README.md docs/user/INSTALL.md docs/developers/DEVELOPING.md docs/developers/Specification.md docs/user/ConfigurationGuide.md config/hambridge.yaml.example config/mappings/visca.yaml.example
+%doc README.md docs/user/INSTALL.md docs/developers/DEVELOPING.md docs/developers/Specification.md docs/user/ConfigurationGuide.md config/hambridge.yaml.example config/mappings/visca.yaml.example patches/README.md
 
 %{_bindir}/hambridge
 

@@ -2,6 +2,12 @@
 
 Notable changes to **HaMBridge** (this repository). Release history for packaging metadata remains in `packaging/debian/changelog` (Debian) and the RPM spec where required by those formats.
 
+## [0.5.1] — 2026-05-16
+
+### Added
+
+- **MQTT TLS (optional)** — `bridge.mqtt.tls` may be a boolean (legacy) or an object with `enabled`, `caFile`, `caPath`, `clientCertFile`, `clientKeyFile`, `verifyPeer`, `serverName`, `minVersion`, `maxVersion`, `ciphers` (see `Specification.md` §3.0). Trust anchors and verification are applied **before** the TLS handshake via a build-time patch on **`prof7bit/fpc-mqtt-client`** `mqtt.pas` (see **`patches/`**; zip pin unchanged for other units). Startup validates paths, warns on **verifyPeer: false** and on private keys readable by group/other, and warns once if **minVersion** / **maxVersion** are set (not enforced; use **ciphers** / OpenSSL defaults).
+
 ## [0.5.0] — 2026-05-16
 
 ### Added

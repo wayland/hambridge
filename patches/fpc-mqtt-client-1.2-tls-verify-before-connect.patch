@@ -1,0 +1,68 @@
+--- a/mqtt/mqtt.pas
++++ b/mqtt/mqtt.pas
+@@ -186,7 +186,10 @@
+ 
+   TMQTTSocket = class(TInetSocket)
+     FSSLHandler: TSSLSocketHandler;
+-    constructor CreateSSL(const AHost: String; APort: Word; Cert, Key: String);
++    { OnVerify runs after client cert paths are set on the handler but before TCP/TLS connect
++      (HaMBridge patch — prof7bit/fpc-mqtt-client 1.2). }
++    constructor CreateSSL(const AHost: String; APort: Word; Cert, Key: String;
++      OnVerify: TMQTTVerifySSLFunc; Mqtt: TMQTTClient);
+     procedure Shutdown;
+     function Wait: TMQTTSocketWaitResult;
+   end;
+@@ -604,11 +607,23 @@
+ 
+ { TMQTTSocket }
+ 
+-constructor TMQTTSocket.CreateSSL(const AHost: String; APort: Word; Cert, Key: String);
++constructor TMQTTSocket.CreateSSL(const AHost: String; APort: Word; Cert, Key: String;
++  OnVerify: TMQTTVerifySSLFunc; Mqtt: TMQTTClient);
++var
++  Allow: Boolean;
+ begin
+   FSSLHandler := TSSLSocketHandler.GetDefaultHandler;
+   FSSLHandler.CertificateData.Certificate.FileName := Cert;
+   FSSLHandler.CertificateData.PrivateKey.FileName := Key;
++  Allow := True;
++  if Assigned(OnVerify) then
++    OnVerify(Mqtt, FSSLHandler as TOpenSSLSocketHandler, Allow);
++  if not Allow then
++  begin
++    FSSLHandler.Free;
++    FSSLHandler := nil;
++    raise ESocketError.Create(seConnectFailed, ['TLS verification rejected by application']);
++  end;
+   Inherited Create(AHost, APort, FSSLHandler);
+   Connect;
+ end;
+@@ -1012,7 +1027,6 @@
+ 
+ function TMQTTClient.ConnectSocket(Host: String; Port: Word; SSL: Boolean): TMQTTError;
+ var
+-  Allow: Boolean = True;
+   S: TMQTTSocket;
+ begin
+   if Connected then
+@@ -1039,12 +1053,14 @@
+         Debug('ssl not supported');
+         exit(mqeSSLNotSupported);
+       end;
+-      S := TMQTTSocket.CreateSSL(Host, Port, FClientCert, FClientKey);
+-      if Assigned(FOnVerifySSL) then begin
+-        FOnVerifySSL(Self, S.FSSLHandler as TOpenSSLSocketHandler, Allow);
+-        if not Allow then begin
+-          S.Free;
+-          exit(mqeSSLVerifyError);
++      try
++        S := TMQTTSocket.CreateSSL(Host, Port, FClientCert, FClientKey, FOnVerifySSL, Self);
++      except
++        on E: ESocketError do
++        begin
++          if Pos('TLS verification rejected', E.Message) > 0 then
++            exit(mqeSSLVerifyError);
++          raise;
+         end;
+       end;
+       FSocket := S;

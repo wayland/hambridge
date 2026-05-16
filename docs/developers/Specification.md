@@ -199,7 +199,9 @@ Notes:
   `serverName`).
 * **`mqtt.tls.minVersion`** / **`mqtt.tls.maxVersion`**: optional TLS protocol bounds (string names
   such as `TLSv1.2` / `TLSv1.3` — exact accepted tokens are implementation-defined but must be
-  documented in release notes).
+  documented in release notes). These keys are accepted for forward-compatible
+  configs but are **not enforced** (the bridge logs a one-time warning); use **`ciphers`** or distro
+  OpenSSL defaults for hardening.
 * **`mqtt.tls.ciphers`**: optional OpenSSL cipher list string; omit for implementation default.
 
 ### MQTT TLS behavioural rules
@@ -1139,6 +1141,7 @@ not committed; **`hambridge.lpr`** in `src/` is the program entry source.
 
 ```
 /Makefile                      # also downloads prof7bit/fpc-mqtt-client (pinned zip + SHA256) into build/deps/
+/patches/                     # build-time patches (e.g. fpc-mqtt-client TLS verify-before-connect); see patches/README.md
 /README.md
 /docs/user/INSTALL.md
 /docs/developers/DEVELOPING.md

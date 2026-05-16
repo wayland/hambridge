@@ -1,0 +1,7 @@
+bridge:
+  mqtt:
+    host: tls.example.invalid
+    port: 8883
+    tls:
+      enabled: true
+      clientCertFile: /nonexistent/client.pem

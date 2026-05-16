@@ -10,7 +10,7 @@ unit mqttpublisher;
 interface
 
 uses
-  SysUtils, Classes, mqtt, config, logger;
+  SysUtils, Classes, mqtt, config, logger, opensslsockets;
 
 type
   THaMqttDeviceMessageEvent = procedure(Sender: TObject; const Topic, Payload: string) of object;
@@ -23,10 +23,13 @@ type
     FLastConnectAttempt: QWord;    { GetTickCount64 of last Connect attempt }
     FConnectBackoffMs: Cardinal;   { Delay between retries; doubles on failure up to cap }
     FOnDeviceMessage: THaMqttDeviceMessageEvent;
+    FTlsInsecureWarned: Boolean;
+    FTlsVersionWarned: Boolean;
     procedure OnConnect(AClient: TMQTTClient);
     procedure OnDisconnect(AClient: TMQTTClient);
     procedure OnDebug(Txt: string);
     procedure HandleMqttReceive(AClient: TMQTTClient; Msg: TMQTTRXData);
+    procedure HaVerifySsl(AClient: TMQTTClient; ASSLHandler: TOpenSSLSocketHandler; var Allow: Boolean);
   public
     constructor Create(const ABridge: TBridgeConfig);
     destructor Destroy; override;
@@ -44,7 +47,7 @@ type
 implementation
 
 uses
-  Math, openssl, opensslsockets;
+  Math, openssl, sslsockets;
 
 { Wires OnConnect/OnDisconnect/OnDebug and initial backoff state. }
 constructor THaMqttPublisher.Create(const ABridge: TBridgeConfig);
@@ -52,13 +55,18 @@ begin
   inherited Create;
   FBridge := ABridge;
   FOnDeviceMessage := nil;
+  FTlsInsecureWarned := False;
+  FTlsVersionWarned := False;
   FClient := TMQTTClient.Create(nil);
   FClient.OnConnect := @OnConnect;
   FClient.OnDisconnect := @OnDisconnect;
   FClient.OnDebug := @OnDebug;
   FClient.OnReceive := @HandleMqttReceive;
+  FClient.OnVerifySSL := @HaVerifySsl;
   FLastConnectAttempt := 0;
   FConnectBackoffMs := 1000;
+  if FBridge.Mqtt.Tls.KeyReadableByOthers then
+    Log(llWarn, 'mqtt tls: client private key is readable by group or others; restrict permissions (e.g. chmod 600)');
 end;
 
 destructor THaMqttPublisher.Destroy;
@@ -70,6 +78,7 @@ begin
     FClient.OnDisconnect := nil;
     FClient.OnDebug := nil;
     FClient.OnReceive := nil;
+    FClient.OnVerifySSL := nil;
     if FClient.Connected then
       FClient.Disconnect;
     FClient.Free;
@@ -113,6 +122,45 @@ begin
   Log(llWarn, 'mqtt: disconnected');
 end;
 
+procedure THaMqttPublisher.HaVerifySsl(AClient: TMQTTClient; ASSLHandler: TOpenSSLSocketHandler; var Allow: Boolean);
+var
+  H: TSSLSocketHandler;
+  HostNm: string;
+begin
+  Allow := True;
+  if not FBridge.Mqtt.TlsOn then
+    Exit;
+  H := ASSLHandler;
+  H.VerifyPeerCert := FBridge.Mqtt.Tls.VerifyPeer;
+  if Trim(FBridge.Mqtt.Tls.CaFile) <> '' then
+    H.CertificateData.TrustedCertificate.FileName := Trim(FBridge.Mqtt.Tls.CaFile);
+  if (Trim(FBridge.Mqtt.Tls.CaPath) <> '') and (Trim(FBridge.Mqtt.Tls.CaFile) = '') then
+    H.CertificateData.CertCA.FileName := Trim(FBridge.Mqtt.Tls.CaPath);
+  HostNm := Trim(FBridge.Mqtt.Tls.ServerName);
+  if HostNm = '' then
+    HostNm := FBridge.Mqtt.Host;
+  H.CertificateData.HostName := HostNm;
+  H.SendHostAsSNI := True;
+  if Trim(FBridge.Mqtt.Tls.Ciphers) <> '' then
+    H.CertificateData.CipherList := Trim(FBridge.Mqtt.Tls.Ciphers);
+  if (Trim(FBridge.Mqtt.Tls.MinVersion) <> '') or (Trim(FBridge.Mqtt.Tls.MaxVersion) <> '') then
+  begin
+    if not FTlsVersionWarned then
+    begin
+      FTlsVersionWarned := True;
+      Log(llWarn, 'mqtt tls: minVersion/maxVersion are not enforced; use mqtt.tls.ciphers or OpenSSL defaults');
+    end;
+  end;
+  if not FBridge.Mqtt.Tls.VerifyPeer then
+  begin
+    if not FTlsInsecureWarned then
+    begin
+      FTlsInsecureWarned := True;
+      Log(llWarn, 'mqtt tls: verifyPeer is false — broker certificate will not be validated (insecure)');
+    end;
+  end;
+end;
+
 { Non-blocking reconnect: if disconnected and backoff elapsed, attempts Connect with optional TLS setup. }
 procedure THaMqttPublisher.TickReconnect;
 var
@@ -126,7 +174,7 @@ begin
   if nowt < FLastConnectAttempt + FConnectBackoffMs then
     Exit;
   FLastConnectAttempt := nowt;
-  if FBridge.Mqtt.Tls then
+  if FBridge.Mqtt.TlsOn then
   begin
 {$ifndef windows}
     if not InitSSLInterface then
@@ -136,10 +184,20 @@ begin
     end;
 {$endif}
   end;
+  if FBridge.Mqtt.TlsOn then
+  begin
+    FClient.ClientCert := FBridge.Mqtt.Tls.ClientCertFile;
+    FClient.ClientKey := FBridge.Mqtt.Tls.ClientKeyFile;
+  end
+  else
+  begin
+    FClient.ClientCert := '';
+    FClient.ClientKey := '';
+  end;
   user := FBridge.Mqtt.Username;
   pass := FBridge.Mqtt.Password;
   err := FClient.Connect(FBridge.Mqtt.Host, FBridge.Mqtt.Port, FBridge.Mqtt.ClientId, user, pass,
-    FBridge.Mqtt.Tls, True);
+    FBridge.Mqtt.TlsOn, True);
   if err <> mqeNoError then
   begin
     LogFmt(llWarn, 'mqtt: connect failed (%d), retry in %u ms', [Ord(err), FConnectBackoffMs]);
