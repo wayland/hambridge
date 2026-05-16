@@ -110,6 +110,10 @@ jobs:
       always() &&
       (needs.verify-tag.result == 'success' || needs.verify-tag.result == 'skipped')
     steps:
+      # actions/checkout needs git inside the job container (fedora:42 has none by default).
+      - name: Install git for checkout
+        run: dnf install -y git
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -117,7 +121,7 @@ jobs:
       - name: Install Fedora build dependencies
         run: |
           dnf install -y \
-            git rpm-build fpc gcc make unzip patch curl \
+            rpm-build fpc gcc make unzip patch curl \
             libevdev-devel systemd-rpm-macros
 
       - name: Build RPM

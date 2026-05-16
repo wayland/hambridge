@@ -144,10 +144,15 @@ debian-deb:
 fedora-rpm-sources:
 	@command -v git >/dev/null 2>&1 || { echo 'fedora-rpm: git is required' >&2; exit 1; }
 	@command -v rpmbuild >/dev/null 2>&1 || { echo 'fedora-rpm: install rpm-build (dnf install rpm-build)' >&2; exit 1; }
-	@test -d .git || { echo 'fedora-rpm: need a git checkout (git archive uses HEAD)' >&2; exit 1; }
 	mkdir -p '$(RPM_TOPDIR)'/{BUILD,BUILDROOT,RPMS/noarch,RPMS/x86_64,RPMS/aarch64,SRPMS,SOURCES,SPECS}
-	git archive --format=tar.gz --prefix=hambridge-$(RPM_VER)/ \
-	  -o '$(RPM_TOPDIR)/SOURCES/hambridge-$(RPM_VER).tar.gz' HEAD
+	@set -e; src='$(RPM_TOPDIR)/SOURCES/hambridge-$(RPM_VER).tar.gz'; \
+	if [ -d .git ]; then \
+	  git archive --format=tar.gz --prefix=hambridge-$(RPM_VER)/ -o "$$src" HEAD; \
+	else \
+	  echo 'fedora-rpm: no .git — packing working tree with tar'; \
+	  tar -czf "$$src" --transform="s,^,hambridge-$(RPM_VER)/," \
+	    --exclude=./build --exclude=./dist .; \
+	fi
 	@set -e; z='$(RPM_TOPDIR)/SOURCES/fpc-mqtt-client-$(FPC_MQTT_TAG).zip'; \
 	if [ -f '$(MQTTZIP)' ]; then cp -f '$(MQTTZIP)' "$$z"; \
 	else curl -fsSL -o "$$z.part" '$(FPC_MQTT_URL)' && mv -f "$$z.part" "$$z"; fi; \

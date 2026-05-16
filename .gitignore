@@ -49,3 +49,6 @@ lib/
 *.swo
 *~
 .DS_Store
+
+# Github job logs (downloaded)
+job-logs.txt
