@@ -126,6 +126,7 @@ jobs:
 
       - name: Build RPM
         run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           make clean
           make
           make fedora-rpm
