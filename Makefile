@@ -29,7 +29,7 @@ FPCFLAGS += -k-L$(EVDEV_LDIR) -k-l:libevdev.so.2
 FPCFLAGS += -Fl/usr/lib64 -Fl/usr/lib/x86_64-linux-gnu -Fl/usr/lib/aarch64-linux-gnu -Fl/usr/lib/arm-linux-gnueabihf
 
 # Keep in sync with src/hambridge.lpr AppVersion and packaging/Redhat/hambridge.spec Version.
-RPM_VER := 0.5.2
+RPM_VER := 0.5.3
 
 # FPCUnit (fcl-fpcunit) for `make test` — path varies by distro / multiarch.
 FPC_VER := $(shell fpc -iV 2>/dev/null)

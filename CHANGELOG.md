@@ -2,6 +2,17 @@
 
 Notable changes to **HaMBridge** (this repository). Release history for packaging metadata remains in `packaging/debian/changelog` (Debian) and the RPM spec where required by those formats.
 
+## [0.5.3] — 2026-05-17
+
+### Fixed
+
+- **CI / Debian builds** — `Makefile` finds **fcl-fpcunit** under `/usr/lib/*-linux-gnu/fpc/...` so `make test` works on Ubuntu/Debian (GitHub Actions `ubuntu-24.04`).
+
+### Changed
+
+- **HaMBridge branding** — README, Specification, packaging text; clone paths use `hambridge`; README summary table covers VISCA over serial and UDP.
+- **Config** — removed pre-release legacy JSON mapping paths, flat serial bus fields, and `/etc/hambridge/hambridge.yaml` discovery (no external releases yet).
+
 ## [0.5.2] — 2026-05-16
 
 ### Added

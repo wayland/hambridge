@@ -17,13 +17,13 @@
 %global fpc_mqtt_sha256  702ded75607d2ba8429fffc3509bbb7607466be9596bc23d8bd73c13f8e74214
 
 Name:           hambridge
-Version:        0.5.2
+Version:        0.5.3
 Release:        1%{?dist}
 Summary:        HaMBridge — Hardware-MQTT bridge (evdev and VISCA, Free Pascal)
 
 License:        GPL-3.0-or-later
 # Set to your public clone URL when publishing the spec (COPR/SourceRPM metadata).
-URL:            https://example.invalid/hambridge
+URL:            https://github.com/wayland/hambridge
 # Tarball from `git archive` (see header comment). Bump Version when tagging releases.
 Source0:        %{name}-%{version}.tar.gz
 # Bundled build dependency (same pin as Makefile); offline-friendly for mock/koji.

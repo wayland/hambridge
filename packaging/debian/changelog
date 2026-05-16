@@ -1,3 +1,10 @@
+hambridge (0.5.3-1) unstable; urgency=medium
+
+  * Makefile: FPCUnit (fcl-fpcunit) discovery on Debian/Ubuntu multiarch paths (CI).
+  * HaMBridge branding and docs; drop pre-release legacy JSON config paths.
+
+ -- Tim Nelson <wayland@wayland.id.au>  Sat, 17 May 2026 12:00:00 +0000
+
 hambridge (0.5.2-1) unstable; urgency=medium
 
   * GitHub Actions CI (make, make test, release-pins drift) and tag release workflow

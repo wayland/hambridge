@@ -143,6 +143,12 @@ per **`Specification.md` §3.4.
 - [x] **Artifacts** — `hambridge-{ver}-linux-x86_64.tar.gz`, `SHA256SUMS`, `.deb` (amd64 + arm64), Fedora `.rpm`.
 - [x] **GitHub Release** — attach assets; body from `CHANGELOG.md` section.
 
+## v0.5.3 — CI / packaging polish
+
+**Shipped:** Debian/Ubuntu **FPCUnit** path in `Makefile`; HaMBridge branding and legacy config cleanup; README VISCA UDP row.
+
+---
+
 ## v1.0.0 — Release!
 
 When the Github Release actions fully work, release v1.0.0
