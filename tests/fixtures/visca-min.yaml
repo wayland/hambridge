@@ -1,0 +1,19 @@
+# Minimal VISCA mapping for unit tests (marshall-cv344 + base power topics).
+# See Specification.md §10.4 — golden bytes align with in-repo mapping examples.
+
+models:
+  base-visca:
+    topics:
+      power/on:
+        bytes: "01 04 00"
+        template: [powerArgument]
+        variables: { powerArgument: "02" }
+      power/off:
+        bytes: "01 04 00 03"
+  marshall-cv344:
+    inherits: base-visca
+    topics:
+      preset/call:
+        bytes: "01 04 3F 02"
+        template: [presetIndex]
+        variables: { presetIndex: "01" }

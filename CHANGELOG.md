@@ -2,6 +2,12 @@
 
 Notable changes to **HaMBridge** (this repository). Release history for packaging metadata remains in `packaging/debian/changelog` (Debian) and the RPM spec where required by those formats.
 
+## [0.5.0] — 2026-05-16
+
+### Added
+
+- **Automated tests (FPCUnit)** — `make test` builds and runs `./build/hambridge_tests` (plain report). Fixtures live under **`tests/fixtures/`**: minimal `hambridge.yaml` slices for **`devicesconfig`** validation (duplicate slugs, UDP triple and cross-bus rules, missing UDP controller, duplicate VISCA controllers) and a small **`visca-min.yaml`** for **`viscamapping`** golden encode/decode (including a controller **power/on** frame aligned with common Sony VISCA / Bitfocus-style bytes per Specification §10.4).
+
 ## [0.4.1] — 2026-05-09
 
 ### Changed

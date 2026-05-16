@@ -1,0 +1,35 @@
+# Two device endpoints on the same UDP bus with identical (udpHost, udpPort, deviceID).
+device_mappings:
+  visca: visca-min.yaml
+
+buses:
+  u1:
+    transport: udp
+    protocol: visca
+    protocol_config: {}
+    transport_configuration:
+      bindHost: "0.0.0.0"
+      bindPort: 52381
+
+endpoints:
+  - match:
+      endpoint_type: device
+      bus: u1
+      deviceID: 1
+    slug: first_cam
+    model: marshall-cv344
+    udpHost: "192.0.2.1"
+    udpPort: 52381
+  - match:
+      endpoint_type: device
+      bus: u1
+      deviceID: 1
+    slug: second_cam
+    model: marshall-cv344
+    udpHost: "192.0.2.1"
+    udpPort: 52381
+  - match:
+      endpoint_type: controller
+      protocol: visca
+      bus: u1
+    slug: ctl_u1

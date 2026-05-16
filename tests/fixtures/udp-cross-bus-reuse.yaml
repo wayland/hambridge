@@ -1,0 +1,47 @@
+# Same remote (udpHost, udpPort) on two different UDP buses — must fail validation.
+device_mappings:
+  visca: visca-min.yaml
+
+buses:
+  u1:
+    transport: udp
+    protocol: visca
+    protocol_config: {}
+    transport_configuration:
+      bindHost: "0.0.0.0"
+      bindPort: 52381
+  u2:
+    transport: udp
+    protocol: visca
+    protocol_config: {}
+    transport_configuration:
+      bindHost: "0.0.0.0"
+      bindPort: 52382
+
+endpoints:
+  - match:
+      endpoint_type: device
+      bus: u1
+      deviceID: 1
+    slug: d1
+    model: marshall-cv344
+    udpHost: "192.0.2.10"
+    udpPort: 52381
+  - match:
+      endpoint_type: device
+      bus: u2
+      deviceID: 2
+    slug: d2
+    model: marshall-cv344
+    udpHost: "192.0.2.10"
+    udpPort: 52381
+  - match:
+      endpoint_type: controller
+      protocol: visca
+      bus: u1
+    slug: c1
+  - match:
+      endpoint_type: controller
+      protocol: visca
+      bus: u2
+    slug: c2

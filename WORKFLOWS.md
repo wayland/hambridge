@@ -16,7 +16,9 @@ Docker, Fedora/RPM, ARM, job order, artifact names, **`release-pins.json`**) is 
    (**`./build/hambridge --config ./config/hambridge.yaml.example`** or your own `hambridge.yaml`).
 
 Install build dependencies as in **`docs/user/INSTALL.md`** and **`packaging/raspbian/README.md`**
-so your machine matches what CI installs (FPC, `libevdev-dev`, `make`, `curl`, `unzip`, …).
+so your machine matches what CI installs (FPC including **FPCUnit** / **fcl-fpcunit**, `libevdev-dev`,
+`make`, `curl`, `unzip`, …). If **`make test`** errors that **fcl-fpcunit** was not found, install the
+full distro **`fpc`** package set (not a minimal `fpc` metapackage that omits FPCUnit).
 
 ---
 

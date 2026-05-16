@@ -28,11 +28,24 @@ FPCFLAGS += -k-L$(EVDEV_LDIR) -k-l:libevdev.so.2
 FPCFLAGS += -Fl/usr/lib64 -Fl/usr/lib/x86_64-linux-gnu -Fl/usr/lib/aarch64-linux-gnu -Fl/usr/lib/arm-linux-gnueabihf
 
 # Keep in sync with src/hambridge.lpr AppVersion and packaging/Redhat/hambridge.spec Version.
-RPM_VER := 0.4.4
+RPM_VER := 0.5.0
+
+# FPCUnit (fcl-fpcunit) for `make test` — path varies by distro / multiarch.
+FPC_VER := $(shell fpc -iV 2>/dev/null)
+FPC_OS := $(shell fpc -iTO 2>/dev/null)
+FPC_CPU := $(shell fpc -iTP 2>/dev/null)
+FPCUNIT_DIR := $(firstword $(wildcard /usr/lib64/fpc/$(FPC_VER)/units/$(FPC_CPU)-$(FPC_OS)/fcl-fpcunit) \
+  $(wildcard /usr/lib/fpc/$(FPC_VER)/units/$(FPC_CPU)-$(FPC_OS)/fcl-fpcunit))
+TESTSRC := tests/hambridge_tests.lpr tests/fixturepaths.pas tests/test_devicesconfig.pas tests/test_viscamapping.pas
+TESTBIN := $(OUTDIR)/hambridge_tests
+TESTFLAGS := -MObjFPC -Scghi -O2 -gl -Futests -Fu$(SRCDIR) -Fu$(MQTTDIR) -Fu$(FPCUNIT_DIR) -FU$(OUTDIR)
+ifeq ($(FPCUNIT_DIR),)
+$(error fcl-fpcunit not found (FPC $(FPC_VER), $(FPC_CPU)-$(FPC_OS)) — install the full fpc / fpc-src package that provides FPCUnit)
+endif
 RPM_TOPDIR := $(abspath build/rpmbuild)
 RPM_SPEC := packaging/Redhat/hambridge.spec
 
-.PHONY: all clean run fedora-rpm-sources fedora-rpm fedora-test raspbian-help debian-deb
+.PHONY: all clean run test fedora-rpm-sources fedora-rpm fedora-test raspbian-help debian-deb
 
 all: $(BINARY)
 
@@ -54,6 +67,12 @@ $(MQTTDIR)/mqtt.pas: | $(OUTDIR)
 
 $(BINARY): $(OUTDIR) $(MQTTDIR)/mqtt.pas $(SRCDIR)/hambridge.lpr $(wildcard $(SRCDIR)/*.pas) $(wildcard $(MQTTDIR)/*.pas)
 	$(FPC) $(FPCFLAGS) -o$(BINARY) $(SRCDIR)/hambridge.lpr
+
+$(TESTBIN): $(OUTDIR) $(MQTTDIR)/mqtt.pas $(TESTSRC) $(wildcard $(SRCDIR)/*.pas)
+	$(FPC) $(TESTFLAGS) -o$(TESTBIN) tests/hambridge_tests.lpr
+
+test: $(TESTBIN)
+	@"$(TESTBIN)" --all --format=plain
 
 clean:
 	rm -rf $(OUTDIR)

@@ -42,7 +42,7 @@ At a high level, HaMBridge supports:
 - **MQTT → VISCA**: subscribe to `device/<slug>/<command>` and send VISCA over serial
 - **VISCA → MQTT**: decode controller traffic (`controller/<slug>/...`) and device replies (`device/<slug>/...`)
 
-Automated verification (FPCUnit, **`make test`**, fixtures — §10) is planned as **v0.5.0**; CI wiring is **v0.5.2**
+Automated verification (FPCUnit, **`make test`**, fixtures — §10) 
 (technical detail §10.6). **Contributor PR and release *process*** (checklists) lives in **`WORKFLOWS.md`**
 at the repository root.
 
@@ -1149,7 +1149,7 @@ not committed; **`hambridge.lpr`** in `src/` is the program entry source.
 /docs/developers/Specification.md   # this file (architecture + spec)
 /CHANGELOG.md                  # release notes (human-oriented)
 /ROADMAP.md                    # backlog / planned work
-/tests/                        # FPCUnit tests + fixtures (v0.5.0+; see §10)
+/tests/                        # FPCUnit tests + fixtures (see §10)
 /config/hambridge.yaml.example
 /config/mappings/visca.yaml.example
 /packaging/README.md             # systemd, sysusers, tmpfiles, udev templates
@@ -1220,8 +1220,8 @@ Unit responsibilities:
   See **`packaging/raspbian/README.md`**.
 * **`make install`** *(optional)* — install binary to `/usr/local/bin` and example configs under
   **`/etc/hambridge/config/`** (if implemented; match **`config/`** layout in the repository).
-* **`make test`** *(v0.5.0+)* — runs the automated test suite (FPCUnit); see §10. Must succeed locally
-  before changes are considered merge-ready; **GitHub Actions** required-check wiring is **v0.5.2**.
+* **`make test`** — runs the automated test suite (FPCUnit); see §10. Must succeed locally
+  before changes are considered merge-ready.  
 
 ### Example config files
 
@@ -1297,11 +1297,9 @@ HaMBridge has a small dependency footprint:
 
 ---
 
-# 10. Verification and automated tests (v0.5.0+)
+# 10. Verification and automated tests
 
-This section defines **how** HaMBridge is tested in-tree. It is **normative for contributors** once
-**v0.5.0** ships; until then it records the agreed target so implementations and CI can align.
-
+This section defines **how** HaMBridge is tested in-tree. It is **normative for contributors**.  
 ## 10.1 Goals and constraints
 
 * **Primary:** **unit tests** (fast, deterministic, no hardware).
@@ -1310,7 +1308,7 @@ This section defines **how** HaMBridge is tested in-tree. It is **normative for 
 * **CI policy:** Automated tests **must pass before a PR is merged** (e.g. required status checks /
   merge queue). **Opening a PR** does not by itself define success—**merge-ready checks** do.
   **GitHub Actions** and branch-protection details are **v0.5.2**; until then, **`make test`** is the
-  developer gate.
+  required **local** gate for contributors.
 * **No hardware-in-the-loop (HIL) in CI:** default automated runs **must not** require physical
   VISCA devices, real RS-485 wiring, or a specific evdev node. Optional **manual** or **lab**
   workflows may exist outside this normative path.
@@ -1318,7 +1316,7 @@ This section defines **how** HaMBridge is tested in-tree. It is **normative for 
 ## 10.2 Framework and entry point
 
 * **Framework:** **FPCUnit** (ships with FPC: `fpcunit`, `testregistry`, `testutils`).
-* **Invocation:** **`make test`** from the repository root is the **canonical** local command (v0.5.0+).
+* **Invocation:** **`make test`** from the repository root is the **canonical** local command.
   Implementations **may** add additional targets (e.g. `make test-verbose`) but **`make test`** must
   remain the documented default.
 

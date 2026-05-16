@@ -1,0 +1,23 @@
+# Valid minimal process config: one serial VISCA bus and one device (no UDP / no evdev).
+device_mappings:
+  visca: visca-min.yaml
+
+buses:
+  rs485-1:
+    transport: serial
+    protocol: visca
+    protocol_config: {}
+    transport_configuration:
+      port: /dev/ttyUSB0
+      baud: 9600
+      dataBits: 8
+      parity: "N"
+      stopBits: 1
+
+endpoints:
+  - match:
+      endpoint_type: device
+      bus: rs485-1
+      deviceID: 1
+    slug: cam_alpha
+    model: marshall-cv344

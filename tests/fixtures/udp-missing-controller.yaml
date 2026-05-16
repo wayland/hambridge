@@ -1,0 +1,22 @@
+# UDP VISCA bus without a controller endpoint — must fail ValidateDevicesConfig.
+device_mappings:
+  visca: visca-min.yaml
+
+buses:
+  u1:
+    transport: udp
+    protocol: visca
+    protocol_config: {}
+    transport_configuration:
+      bindHost: "0.0.0.0"
+      bindPort: 52381
+
+endpoints:
+  - match:
+      endpoint_type: device
+      bus: u1
+      deviceID: 1
+    slug: lone_device
+    model: marshall-cv344
+    udpHost: "192.0.2.1"
+    udpPort: 52381

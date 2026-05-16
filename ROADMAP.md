@@ -112,8 +112,14 @@ per **`Specification.md` §3.4.
 
 ## v0.5.0 — Test Suite
 
-Does Free Pascal have a testing suite?  If so, fill in some information here about using it
+**Shipped:** FPCUnit + **`make test`** (see **`docs/developers/Specification.md`** §10 and **`tests/`**).
 
+### Test Suite Checklist
+
+- [x] **`make test`** — builds **`./build/hambridge_tests`** and runs all registered tests (plain output).
+- [x] **Fixtures** — **`tests/fixtures/`** YAML for config validation and **`visca-min.yaml`** for mapping golden I/O.
+- [x] **Config / validation coverage** — duplicate device slug; duplicate UDP `(host, port, deviceID)`; UDP `(host, port)` reused across buses; UDP bus without controller; two VISCA controllers on one UDP bus.
+- [x] **VISCA mapping coverage** — encode **preset/call** and **power/on**; **ViscaPacketToHex**; decode controller **power/on** wire bytes.
 
 ## v0.5.1 — TLS Configuration (Optional)
 
